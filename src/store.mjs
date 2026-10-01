@@ -5,6 +5,7 @@ import {mkdirSync,readFileSync,writeFileSync,chmodSync} from 'node:fs';
 import path from 'node:path';
 import {parseSource,inventory,generateConfig} from './config.mjs';
 import {createMeter} from './meter.mjs';
+import {DEFAULT_SETTINGS,validateSettings,invalid} from './settings.mjs';
 const scrypt=promisify(rawScrypt);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const safeEqual=(a,b)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
@@ -33,33 +34,76 @@ export function openStore(directory){
  CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,target TEXT NOT NULL);
  `);
+ for(const [name,type]of [['display_name',"TEXT NOT NULL DEFAULT ''"],['email',"TEXT NOT NULL DEFAULT ''"],['note',"TEXT NOT NULL DEFAULT ''"],['plan_name',"TEXT NOT NULL DEFAULT ''"],['display_gb','REAL'],['expires_at','INTEGER']])if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name===name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
+ if(!db.prepare('PRAGMA table_info(audit)').all().some(c=>c.name==='details'))db.exec("ALTER TABLE audit ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
+ db.exec('CREATE INDEX IF NOT EXISTS audit_time_id ON audit(at,id)');
  const getUser=id=>db.prepare('SELECT * FROM users WHERE id=?').get(id);
- const audit=(actor,action,target)=>{db.prepare('INSERT INTO audit(at,actor,action,target) VALUES(?,?,?,?)').run(Date.now(),actor,action,target);db.prepare('DELETE FROM audit WHERE id NOT IN (SELECT id FROM audit ORDER BY id DESC LIMIT 500)').run();};
+ const getSettings=()=>({...DEFAULT_SETTINGS,...JSON.parse(db.prepare("SELECT value FROM settings WHERE key='admin_config'").get()?.value||'{}')});
+ const validatePassword=password=>{if(typeof password!=='string'||password.length<getSettings().minPasswordLength||password.length>128)throw invalid(`密码至少需要 ${getSettings().minPasswordLength} 个字符，最多 128 个字符`);};
+ const isActive=u=>!!u&&!!u.enabled&&(!u.expires_at||u.expires_at>Date.now());
+ function profileValues(id,body,u){
+  const v={username:body.username??u.username,display_name:body.displayName??u.display_name,email:body.email??u.email,note:body.note??u.note,plan_name:body.planName??u.plan_name,display_gb:body.displayGB===undefined?u.display_gb:body.displayGB,expires_at:body.expiresAt===undefined?u.expires_at:body.expiresAt};
+  if(typeof v.username!=='string'||!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,39}$/.test(v.username))throw invalid('账号格式无效');
+  const duplicate=db.prepare('SELECT id FROM users WHERE username=? AND id<>?').get(v.username,id);if(duplicate)throw invalid('账号已存在');
+  for(const [k,max]of [['display_name',60],['email',254],['note',1000],['plan_name',60]])if(typeof v[k]!=='string'||v[k].length>max||/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(v[k]))throw invalid('用户资料字段无效');
+  if(v.email&&!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email))throw invalid('邮箱格式无效');
+  if(v.display_gb!==null&&(!Number.isFinite(v.display_gb)||v.display_gb<0.1||v.display_gb>10000))throw invalid('展示额度需为 0.1–10000 GB，或留空');
+  if(v.expires_at!==null&&(!Number.isSafeInteger(v.expires_at)||v.expires_at<=0||v.expires_at>Date.UTC(2100,0,1)))throw invalid('有效期格式无效');
+  const enabled=body.enabled===undefined?!!u.enabled:body.enabled,grants=body.grants===undefined?JSON.parse(u.grants):body.grants;
+  if(typeof enabled!=='boolean'||!Array.isArray(grants)||grants.length>200||!grants.every(id=>store.inventory().some(n=>n.id===id)))throw invalid('权限数据无效');
+  return {v,enabled,grants};
+ }
+ function updateUser(id,body){
+  const u=getUser(id);if(!u||u.role!=='user')throw invalid('只能修改普通用户');
+  const {v,enabled,grants}=profileValues(id,body,u);
+  db.exec('BEGIN IMMEDIATE');try{
+   db.prepare('UPDATE users SET username=?,display_name=?,email=?,note=?,plan_name=?,display_gb=?,expires_at=?,enabled=?,grants=? WHERE id=?').run(v.username,v.display_name,v.email,v.note,v.plan_name,v.display_gb,v.expires_at,enabled?1:0,JSON.stringify([...new Set(grants)]),id);
+   for(const n of store.meter.nodes())if(n.enabled&&grants.includes(n.proxy_id))store.meter.allowUser(n.id,id);
+   if(u.username!==v.username||!enabled||v.expires_at&&v.expires_at<=Date.now()){db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);rotate(id);}
+   db.exec('COMMIT');return getUser(id);
+  }catch(e){db.exec('ROLLBACK');throw e;}
+ }
+ let lastPrune=0;
+ function pruneAudit(force=false){if(!force&&Date.now()-lastPrune<3600000)return 0;lastPrune=Date.now();return db.prepare('DELETE FROM audit WHERE at<?').run(Date.now()-30*86400000).changes;}
+ const audit=(actor,action,target,details={})=>{pruneAudit();db.prepare('INSERT INTO audit(at,actor,action,target,details) VALUES(?,?,?,?,?)').run(Date.now(),actor,action,target,JSON.stringify(details));};
+ function auditPage(cursor){
+  pruneAudit();const now=Date.now();let anchor=now,before=db.prepare('SELECT coalesce(max(id),0)+1 id FROM audit').get().id,since=now-86400000;
+  if(cursor){if(typeof cursor!=='string'||cursor.length>300)throw invalid('日志游标无效');const [encoded,signature]=cursor.split('.');if(!encoded||!signature||!safeEqual(signature,createHmac('sha256',key).update('audit:'+encoded).digest('base64url')))throw invalid('日志游标无效');let value;try{value=JSON.parse(Buffer.from(encoded,'base64url').toString());}catch{throw invalid('日志游标无效');}if(!Number.isSafeInteger(value.before)||value.before<1||!Number.isSafeInteger(value.anchor)||value.anchor>now+300000||value.anchor<now-30*86400000)throw invalid('日志游标无效');({anchor,before}=value);since=now-30*86400000;}
+  const items=db.prepare('SELECT id,at,actor,action,target,details FROM audit WHERE at>=? AND at<=? AND id<? ORDER BY id DESC LIMIT 30').all(since,anchor,before).map(r=>({...r,details:JSON.parse(r.details)}));
+  const nextBefore=items.at(-1)?.id||before,hasMore=!!db.prepare('SELECT 1 FROM audit WHERE at>=? AND at<=? AND id<? LIMIT 1').get(now-30*86400000,anchor,nextBefore);
+  const encoded=Buffer.from(JSON.stringify({anchor,before:nextBefore})).toString('base64url');return {items,hasMore,nextCursor:hasMore?encoded+'.'+createHmac('sha256',key).update('audit:'+encoded).digest('base64url'):null,retentionDays:30,window:cursor?'30d':'24h'};
+ }
+ pruneAudit(true);
  const rotate=id=>db.prepare('UPDATE users SET version=? WHERE id=?').run(randomBytes(16).toString('hex'),id);
  let cachedText,cachedSource;
  const source=()=>{const text=db.prepare('SELECT value FROM settings WHERE key=?').get('source')?.value;if(text!==cachedText){cachedSource=text?parseSource(text):null;cachedText=text;}return cachedSource?structuredClone(cachedSource):null;};
  const subscription=u=>`${u.id}.${createHmac('sha256',key).update(u.id+':'+u.version).digest('base64url')}`;
  const store={
-  db,close:()=>db.close(),getUser,source,audit,
+  db,close:()=>db.close(),getUser,source,audit,getSettings,isActive,updateUser,pruneAudit,auditPage,
+  setSettings(patch){const settings=validateSettings(patch,getSettings());db.prepare("INSERT INTO settings(key,value) VALUES('admin_config',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(settings));return settings;},
+  displayBytes:u=>Math.round((u?.display_gb??getSettings().defaultDisplayGB)*1024**3),
+  publicPolicy:()=>{const s=getSettings();return {siteName:s.siteName,subscriptionMinutes:s.subscriptionMinutes,uiRefreshSeconds:s.uiRefreshSeconds,minPasswordLength:s.minPasswordLength};},
   inventory:()=>{const s=source();return s?inventory(s):[];},
-  listUsers:()=>db.prepare('SELECT id,username,role,enabled,must_change,grants,created FROM users ORDER BY created').all().map(u=>({...u,grants:JSON.parse(u.grants)})),
-  async createUser(username,password,grants=[],role='user'){
+  listUsers:()=>db.prepare('SELECT id,username,role,enabled,must_change,grants,created,display_name,email,note,plan_name,display_gb,expires_at FROM users ORDER BY created').all().map(u=>({...u,active:isActive(u),grants:JSON.parse(u.grants)})),
+  async createUser(username,password,grants=[],role='user',profile={}){
+   validatePassword(password);
    if(!/^[a-zA-Z0-9][a-zA-Z0-9_.-]{2,39}$/.test(username))throw Error('账号需为 3–40 位字母、数字、点、横线或下划线');
    const hashed=await passwordHash(password),id=randomUUID();
-   db.prepare('INSERT INTO users(id,username,password,role,must_change,grants,version,created) VALUES(?,?,?,?,?,?,?,?)').run(id,username,hashed,role,role==='admin'?0:1,JSON.stringify(grants),randomBytes(16).toString('hex'),Date.now());
+   const {v,enabled,grants:validated}=profileValues(id,{...profile,username,grants},{username,display_name:'',email:'',note:'',plan_name:'',display_gb:null,expires_at:null,enabled:1,grants:'[]'});
+   db.prepare('INSERT INTO users(id,username,password,role,must_change,grants,version,created,display_name,email,note,plan_name,display_gb,expires_at,enabled) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,username,hashed,role,role==='admin'?0:1,JSON.stringify(validated),randomBytes(16).toString('hex'),Date.now(),v.display_name,v.email,v.note,v.plan_name,v.display_gb,v.expires_at,enabled?1:0);
    if(role==='user')for(const n of store.meter.nodes())if(n.enabled&&grants.includes(n.proxy_id))store.meter.allowUser(n.id,id);
    return id;
   },
   findUser:username=>db.prepare('SELECT * FROM users WHERE username=?').get(username),
-  async setPassword(id,password){const value=await passwordHash(password);db.prepare('UPDATE users SET password=?,must_change=0 WHERE id=?').run(value,id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);rotate(id);},
+  async setPassword(id,password){validatePassword(password);const value=await passwordHash(password);db.prepare('UPDATE users SET password=?,must_change=0 WHERE id=?').run(value,id);db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);rotate(id);},
   requirePasswordChange:id=>db.prepare('UPDATE users SET must_change=1 WHERE id=?').run(id),
-  setAccess(id,enabled,grants){db.prepare('UPDATE users SET enabled=?,grants=? WHERE id=?').run(enabled?1:0,JSON.stringify(grants),id);for(const n of store.meter.nodes())if(n.enabled&&grants.includes(n.proxy_id))store.meter.allowUser(n.id,id);if(!enabled){db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);rotate(id);}},
+  setAccess:(id,enabled,grants)=>updateUser(id,{enabled,grants}),
   importSource(text){parseSource(text);db.prepare('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').run('source',text);},
-  session(id){db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);const token=randomBytes(32).toString('base64url'),csrf=randomBytes(24).toString('base64url');db.prepare('INSERT INTO sessions VALUES(?,?,?,?)').run(hash(token),id,csrf,Date.now()+8*3600000);return {token,csrf};},
-  authenticate(token){if(typeof token!=='string'||token.length>128)return null;return db.prepare('SELECT users.*,sessions.csrf FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>? AND enabled=1').get(hash(token),Date.now())||null;},
+  session(id){db.prepare('DELETE FROM sessions WHERE expires<?').run(Date.now());db.prepare('DELETE FROM sessions WHERE user_id=?').run(id);const token=randomBytes(32).toString('base64url'),csrf=randomBytes(24).toString('base64url');db.prepare('INSERT INTO sessions VALUES(?,?,?,?)').run(hash(token),id,csrf,Date.now()+getSettings().sessionHours*3600000);return {token,csrf};},
+  authenticate(token){if(typeof token!=='string'||token.length>128)return null;const u=db.prepare('SELECT users.*,sessions.csrf FROM sessions JOIN users ON users.id=sessions.user_id WHERE token_hash=? AND expires>? AND enabled=1').get(hash(token),Date.now());return isActive(u)?u:null;},
   logout:token=>{if(token)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(token));},
   subscription,rotate,
-  subscriptionUser(token){if(typeof token!=='string'||token.length>128)return null;const id=token.split('.')[0],u=getUser(id);return u&&u.enabled&&!u.must_change&&safeEqual(token,subscription(u))?u:null;},
+  subscriptionUser(token){if(typeof token!=='string'||token.length>128)return null;const id=token.split('.')[0],u=getUser(id);return isActive(u)&&!u.must_change&&safeEqual(token,subscription(u))?u:null;},
   config(u){const s=source();if(!s)throw Error('管理员尚未导入配置');return generateConfig(store.meter.overrideSource(s,u),JSON.parse(u.grants));},
  };
  store.meter=createMeter(store);

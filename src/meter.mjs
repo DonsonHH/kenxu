@@ -1,6 +1,6 @@
 import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {inventory} from './config.mjs';
-import {monthlyPeriod,DISPLAY_ALLOWANCE_BYTES,UI_REFRESH_SECONDS} from './policy.mjs';
+import {monthlyPeriod} from './policy.mjs';
 const digest=value=>createHash('sha256').update(value).digest('hex');
 const DAY=86400000;
 export function createMeter(store){
@@ -29,7 +29,7 @@ export function createMeter(store){
   const routes=db.prepare('SELECT * FROM meter_nodes WHERE agent_id=? AND enabled=1 ORDER BY id').all(node.agent_id||node.id).map(n=>{
    const proxy=s?.proxies.find(p=>p.name===names.get(n.proxy_id));if(!proxy||proxy.type!=='vless')throw Error('计量节点源配置不可用');
    const ws=JSON.parse(n.client_template||'null')?.network==='ws';
-   const clients=users.filter(u=>u.role==='user'&&u.enabled&&!u.must_change&&u.grants.includes(n.proxy_id)&&db.prepare('SELECT 1 FROM meter_allowlist WHERE user_id=? AND node_id=?').get(u.id,n.id)).map(u=>credential(u,n)).map(c=>({id:c.uuid,email:c.email,level:88,...(!ws?{flow:proxy.flow||''}:{})})).sort((a,b)=>a.email.localeCompare(b.email));
+   const clients=users.filter(u=>u.role==='user'&&store.isActive(u)&&!u.must_change&&u.grants.includes(n.proxy_id)&&db.prepare('SELECT 1 FROM meter_allowlist WHERE user_id=? AND node_id=?').get(u.id,n.id)).map(u=>credential(u,n)).map(c=>({id:c.uuid,email:c.email,level:88,...(!ws?{flow:proxy.flow||''}:{})})).sort((a,b)=>a.email.localeCompare(b.email));
    return {nodeId:n.id,routeId:n.proxy_id,outboundTag:n.outbound_tag||null,clients};
   });
   return {nodeId:node.agent_id||node.id,routes,revision:digest(JSON.stringify(routes)),clients:routes.flatMap(r=>r.clients).sort((a,b)=>a.email.localeCompare(b.email))};
@@ -74,18 +74,19 @@ export function createMeter(store){
    db.exec('COMMIT');return {ok:true,duplicate:false};
   }catch(e){db.exec('ROLLBACK');throw e;}
  }
- function totals(userId){
+ function totals(userId,nodeId){
   const now=Date.now(),period=monthlyPeriod(now),local=new Date(now+8*3600000);
   const day=Date.UTC(local.getUTCFullYear(),local.getUTCMonth(),local.getUTCDate())-8*3600000;
   const data=db.prepare(`SELECT coalesce(sum(up),0) u,coalesce(sum(down),0) d,
    coalesce(sum(CASE WHEN at>=? AND at<? THEN up ELSE 0 END),0) du,coalesce(sum(CASE WHEN at>=? AND at<? THEN down ELSE 0 END),0) dd,
    coalesce(sum(CASE WHEN at>=? AND at<? THEN up ELSE 0 END),0) mu,coalesce(sum(CASE WHEN at>=? AND at<? THEN down ELSE 0 END),0) md
-   FROM usage_events WHERE user_id=?`).get(day,day+DAY,day,day+DAY,period.start,period.end,period.start,period.end,userId);
+   FROM usage_events WHERE ${[userId?'user_id=?':null,nodeId?'node_id=?':null].filter(Boolean).join(' AND ')||'1=1'}`).get(day,day+DAY,day,day+DAY,period.start,period.end,period.start,period.end,...[userId,nodeId].filter(Boolean));
   return {today:{up:data.du,down:data.dd},month:{up:data.mu,down:data.md},total:{up:data.u,down:data.d},period};
  }
- function daily(userId){
+ function daily(userId,nodeId){
   const now=Date.now(),local=new Date(now+8*3600000),today=Date.UTC(local.getUTCFullYear(),local.getUTCMonth(),local.getUTCDate())-8*3600000,start=today-29*DAY;
-  const rows=new Map(db.prepare("SELECT strftime('%Y-%m-%d',at/1000,'unixepoch','+8 hours') date,sum(up) up,sum(down) down FROM usage_events WHERE user_id=? AND at>=? GROUP BY date").all(userId,start).map(r=>[r.date,r]));
+  const filter=[userId?'user_id=?':null,nodeId?'node_id=?':null].filter(Boolean).join(' AND ');
+  const rows=new Map(db.prepare(`SELECT strftime('%Y-%m-%d',at/1000,'unixepoch','+8 hours') date,sum(up) up,sum(down) down FROM usage_events WHERE ${filter?filter+' AND ':''}at>=? AND at<? GROUP BY date`).all(...[userId,nodeId].filter(Boolean),start,today+DAY).map(r=>[r.date,r]));
   return Array.from({length:30},(_,i)=>{const date=new Date(start+i*DAY+8*3600000).toISOString().slice(0,10);return rows.get(date)||{date,up:0,down:0};});
  }
  function usage(userId,revisions=new Map()){
@@ -93,8 +94,8 @@ export function createMeter(store){
   const amounts=totals(userId);
   const user=store.getUser(userId),grants=new Set(JSON.parse(user.grants));
   const revisionFor=n=>{if(!revisions.has(n.agent_id)){try{revisions.set(n.agent_id,desired(nodeById(n.agent_id)).revision);}catch{revisions.set(n.agent_id,null);}}return revisions.get(n.agent_id);};
-  const routes=db.prepare('SELECT n.*,c.created started FROM meter_nodes n JOIN meter_credentials c ON c.node_id=n.id WHERE c.user_id=?').all(userId).map(n=>({id:n.proxy_id,name:n.name,lastSeen:n.last_seen,startedAt:n.started,assigned:grants.has(n.proxy_id)&&!!n.enabled,kind:n.client_template?'relay':n.outbound_tag?'forwarded':'direct',online:!!n.enabled&&n.last_seen>now-90000,synced:!!revisionFor(n)&&n.applied_revision===revisionFor(n),...db.prepare('SELECT coalesce(sum(up),0) up,coalesce(sum(down),0) down FROM usage_events WHERE user_id=? AND node_id=?').get(userId,n.id)}));
-  return {...amounts,daily:daily(userId),allowance:{bytes:DISPLAY_ALLOWANCE_BYTES,enforced:false},routes,timezone:'Asia/Shanghai',coverage:'受管入口上传与下载合计；不含 DIRECT、旧共享凭据与绕过入口的连接',sampleIntervalSeconds:15,uiRefreshIntervalSeconds:UI_REFRESH_SECONDS};
+  const routes=db.prepare('SELECT n.*,c.created started FROM meter_nodes n JOIN meter_credentials c ON c.node_id=n.id WHERE c.user_id=?').all(userId).map(n=>{const amount=totals(userId,n.id);return {id:n.proxy_id,meterId:n.id,agentId:n.agent_id,name:n.name,lastSeen:n.last_seen,startedAt:n.started,assigned:grants.has(n.proxy_id)&&!!n.enabled,kind:n.client_template?'relay':n.outbound_tag?'forwarded':'direct',online:!!n.enabled&&n.last_seen>now-90000,synced:!!revisionFor(n)&&n.applied_revision===revisionFor(n),...amount.total,today:amount.today,month:amount.month,total:amount.total};});
+  return {...amounts,daily:daily(userId),allowance:{bytes:store.displayBytes(user),enforced:false},routes,timezone:'Asia/Shanghai',coverage:'受管入口上传与下载合计；不含 DIRECT、旧共享凭据与绕过入口的连接',sampleIntervalSeconds:15,uiRefreshIntervalSeconds:store.getSettings().uiRefreshSeconds};
  }
  return {
   desired,overrideSource,report,usage,totals,
@@ -102,6 +103,7 @@ export function createMeter(store){
   register(proxyId,name,{agentId,outboundTag,clientTemplate}={}){if(!store.inventory().some(n=>n.id===proxyId&&n.type==='vless'))throw Error('节点不存在或不是 VLESS');if(agentId&&nodeById(agentId)?.agent_id!==agentId)throw Error('Invalid physical agent');if(outboundTag&&!/^[a-zA-Z0-9_-]{1,64}$/.test(outboundTag))throw Error('Invalid outbound');const id=randomUUID(),token=randomBytes(32).toString('base64url');db.prepare('INSERT INTO meter_nodes(id,proxy_id,name,token_hash,created,agent_id,outbound_tag,client_template) VALUES(?,?,?,?,?,?,?,?)').run(id,proxyId,name,digest(token),Date.now(),agentId||id,outboundTag||null,clientTemplate?JSON.stringify(clientTemplate):null);return {id,token};},
   nodes:()=>db.prepare('SELECT id,proxy_id,name,enabled,last_seen,created,agent_id,outbound_tag,client_template FROM meter_nodes').all().map(n=>({...n,client_template:undefined,kind:n.client_template?'relay':n.outbound_tag?'forwarded':'direct'})),
   nodeById,
+  nodeUsage(id){const n=nodeById(id);if(!n)return null;return {node:{id:n.id,name:n.name,agentId:n.agent_id,lastSeen:n.last_seen,kind:n.client_template?'relay':n.outbound_tag?'forwarded':'direct'},totals:totals(null,id),daily:daily(null,id),users:store.listUsers().filter(u=>u.role==='user'&&db.prepare('SELECT 1 FROM meter_credentials WHERE user_id=? AND node_id=?').get(u.id,id)).map(u=>({id:u.id,username:u.username,displayName:u.display_name,totals:totals(u.id,id)}))};},
   allowUser(nodeId,userId){const n=nodeById(nodeId),u=store.getUser(userId);if(!n||!u||u.role!=='user'||!JSON.parse(u.grants).includes(n.proxy_id))throw Error('用户未获节点授权');db.prepare('INSERT OR IGNORE INTO meter_allowlist VALUES(?,?)').run(userId,nodeId);credential(u,n);},
   users:()=>{const revisions=new Map();return store.listUsers().filter(u=>u.role==='user').map(u=>({id:u.id,username:u.username,enabled:!!u.enabled,...usage(u.id,revisions)}));},
  };

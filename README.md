@@ -12,6 +12,18 @@ Private subscription and traffic-accounting portal for trusted friends. Built an
 - Subscription refresh recommendation: 720 minutes; website polling: 60 seconds. Node sampling remains 15 seconds.
 - Separate loopback user/admin servers, scrypt password hashes, HttpOnly/SameSite sessions, CSRF/Origin checks and private/no-store subscription responses.
 
+## Private management console
+
+The administrator port uses a distinct **Kenxu Control** identity. It supports editable ordinary-user usernames, display names, contact emails, administrator-only notes, labels, display allowance overrides and optional account expiry. Rename revokes existing user sessions/subscription links while retaining accounting identities. Expiry is checked at login, session/subscription use and node client synchronization; it is not a traffic quota.
+
+User and node rows open detailed upload/download breakdowns and 30-day daily records. Settings persist validated site/admin titles, website and subscription intervals, default display GB, password floor, new-session duration, and monitoring source/cache policy. Existing accounts/default intervals are preserved unless explicitly edited.
+
+The monitoring adapter is read-only and uses an operator-provided HTTPS root plus the server-side `MONITOR_ALLOWED_ORIGINS` allowlist (comma-separated origins). It caches a bounded public bootstrap response, returns selected CPU/memory/disk/network/uptime fields only, and does not weaken monitoring-site frame protections. Infrastructure period totals are not per-user proxy usage.
+
+Audit logs default to the latest 24 hours, with signed continuation pages into the retained 30-day window. Startup/hourly maintenance removes only audit entries older than 30 days, not the traffic ledger. The former 500-row cap is removed; already-deleted historical entries cannot be reconstructed.
+
+On Windows, configure the ignored private `deploy/admin-ssh.config` from the example and install a dedicated, restricted forwarding key. `node deploy/launch-admin.mjs --check` validates configuration; `deploy/create-admin-shortcut.ps1` creates a desktop link. The launcher checks/starts a hidden local forwarding session and opens the private portal without storing server passwords or creating/overwriting the portal administrator. Web login remains required. Keep private keys outside this repository. See [the administration review](docs/admin-control-review.md).
+
 Layout and information architecture reference [cedar2025/Xboard](https://github.com/cedar2025/Xboard); see [study and compatibility notes](docs/xboard-study.md). This is an independently implemented Node/SQLite portal, not a deployment of Xboard's PHP/billing engine.
 
 ## Local setup

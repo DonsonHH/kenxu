@@ -1,11 +1,12 @@
 import express from 'express';
 import {fileURLToPath} from 'node:url';
 import {passwordMatches,passwordHash} from './store.mjs';
-import {SUBSCRIPTION_UPDATE_MINUTES,DISPLAY_ALLOWANCE_BYTES} from './policy.mjs';
+import {createMonitorReader} from './monitor.mjs';
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
 const badPassword=await passwordHash('dummy-password-not-an-account');
-export function createApp({store,origin,subscriptionOrigin=origin,admin=false}){
+export function createApp({store,origin,subscriptionOrigin=origin,admin=false,monitorReader}){
  const app=express();app.disable('x-powered-by');
+ const readMonitor=monitorReader||createMonitorReader(store);
  for(const value of [origin,subscriptionOrigin]){const parsed=new URL(value);if(parsed.origin!==value||(parsed.protocol!=='https:'&&!(parsed.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(parsed.hostname))))throw Error('Use an exact HTTPS origin or loopback HTTP origin');}
  const parsedOrigin=new URL(origin);
  const secure=parsedOrigin.protocol==='https:',cookieName=secure?'__Host-donson-access':admin?'donson_admin':'donson_local';
@@ -22,12 +23,13 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false}){
   next();
  });
  app.use(express.json({limit:'600kb',strict:true}));
- app.get('/healthz',(_req,res)=>res.json({ok:true}));
+ app.get('/healthz',(_req,res)=>res.json({ok:true,interface:admin?'admin':'user'}));
+ app.get('/api/interface',(_req,res)=>res.json({adminInterface:admin,title:admin?store.getSettings().adminTitle:store.getSettings().siteName,policy:store.publicPolicy()}));
  const sendConfig=(res,user)=>{
   const configuration=store.config(user),month=store.meter.totals(user.id).month;
   res.set({'Content-Type':'text/yaml; charset=utf-8','Content-Disposition':'attachment; filename="Kenxu.yaml"',
-   'profile-update-interval':String(SUBSCRIPTION_UPDATE_MINUTES/60),'profile-web-page-url':subscriptionOrigin,
-   'subscription-userinfo':`upload=${month.up}; download=${month.down}; total=${DISPLAY_ALLOWANCE_BYTES}`}).send(configuration);
+   'profile-update-interval':String(store.getSettings().subscriptionMinutes/60),'profile-web-page-url':subscriptionOrigin,
+   'subscription-userinfo':`upload=${month.up}; download=${month.down}; total=${store.displayBytes(user)}${user.expires_at?'; expire='+Math.floor(user.expires_at/1000):''}`}).send(configuration);
  };
  app.post('/api/login',async(req,res)=>{
   const {username,password}=req.body||{};
@@ -36,9 +38,9 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false}){
   runningPasswords++;
   try{
    const u=store.findUser(username);const valid=await passwordMatches(password,u?.password||badPassword);
-   if(!valid||!u?.enabled||(admin?u.role!=='admin':u.role==='admin'))return res.status(401).json({error:'账号或密码不正确，或账号不可用'});
+   if(!valid||!store.isActive(u)||(admin?u.role!=='admin':u.role==='admin'))return res.status(401).json({error:'账号或密码不正确，或账号不可用'});
    attempts.delete('login:'+username.toLowerCase());
-   const s=store.session(u.id);res.set('Set-Cookie',cookie(s.token));store.audit(u.username,'login',u.id);res.json({ok:true});
+   const s=store.session(u.id);res.set('Set-Cookie',cookie(s.token,store.getSettings().sessionHours*3600));store.audit(u.username,'login',u.id);res.json({ok:true});
   }finally{runningPasswords--;}
  });
  app.use('/api/meter',(req,res,next)=>{const auth=req.headers.authorization;const n=store.meter.authenticate(typeof auth==='string'&&auth.startsWith('Bearer ')?auth.slice(7):'');if(!n)return res.status(401).json({error:'采集身份无效'});req.meterNode=n;next();});
@@ -77,20 +79,26 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false}){
  app.get('/api/config',(req,res)=>{try{sendConfig(res,req.user);}catch{res.status(403).json({error:'管理员尚未分配可用配置'});}});
  app.use('/api/admin',(req,res,next)=>{if(!admin||req.user.role!=='admin')return res.status(403).json({error:'此操作仅限私有管理入口'});next();});
  const checkGrants=grants=>Array.isArray(grants)&&grants.length<=200&&grants.every(id=>typeof id==='string'&&store.inventory().some(n=>n.id===id));
- app.get('/api/admin/state',(_req,res)=>res.json({users:store.listUsers().map(u=>({...u,meterNodes:store.db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(u.id).map(n=>n.node_id)})),nodes:store.inventory(),meterNodes:store.meter.nodes(),audit:store.db.prepare('SELECT at,actor,action,target FROM audit ORDER BY id DESC LIMIT 30').all()}));
+ app.get('/api/admin/settings',(_req,res)=>res.json(store.getSettings()));
+ app.get('/api/admin/monitor',async(_req,res)=>res.json(await readMonitor()));
+ app.put('/api/admin/settings',(req,res)=>{const settings=store.setSettings(req.body);store.audit(req.user.username,'settings-update','system',{fields:Object.keys(req.body)});res.json(settings);});
+ app.get('/api/admin/state',(_req,res)=>res.json({users:store.listUsers().map(u=>({...u,meterNodes:store.db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(u.id).map(n=>n.node_id)})),nodes:store.inventory(),meterNodes:store.meter.nodes()}));
+ app.get('/api/admin/audit',(req,res)=>res.json(store.auditPage(req.query.cursor)));
  app.get('/api/admin/usage',(_req,res)=>res.json({users:store.meter.users(),nodes:store.meter.nodes()}));
+ app.get('/api/admin/usage/users/:id',(req,res)=>{const u=store.getUser(req.params.id);if(!u||u.role!=='user')return res.sendStatus(404);res.json({id:u.id,username:u.username,displayName:u.display_name,...store.meter.usage(u.id)});});
+ app.get('/api/admin/usage/nodes/:id',(req,res)=>{const data=store.meter.nodeUsage(req.params.id);if(!data)return res.sendStatus(404);res.json(data);});
  app.post('/api/admin/meter/users/:id/enroll',(req,res)=>{try{store.meter.allowUser(req.body?.nodeId,req.params.id);store.audit(req.user.username,'meter-enroll',req.params.id);res.json({ok:true});}catch{res.status(400).json({error:'用户或节点授权无效'});}});
  app.post('/api/admin/users',async(req,res)=>{
   if(!checkGrants(req.body?.grants))return res.status(400).json({error:'节点权限无效'});
   if(typeof req.body?.username!=='string')return res.status(400).json({error:'账号格式无效'});
   if(store.findUser(req.body.username))return res.status(409).json({error:'账号已存在'});
-  const id=await store.createUser(req.body?.username,req.body?.password,req.body.grants);
+  const id=await store.createUser(req.body?.username,req.body?.password,req.body.grants,'user',req.body);
   store.audit(req.user.username,'user-create',id);res.status(201).json({id});
  });
  app.put('/api/admin/users/:id',(req,res)=>{
   const u=store.getUser(req.params.id);if(!u||u.role==='admin')return res.status(400).json({error:'只能修改普通用户'});
   if(typeof req.body?.enabled!=='boolean'||!checkGrants(req.body.grants))return res.status(400).json({error:'权限数据无效'});
-  store.setAccess(u.id,req.body.enabled,req.body.grants);store.audit(req.user.username,'user-access',u.id);res.json({ok:true});
+  store.updateUser(u.id,req.body);store.audit(req.user.username,'user-access',u.id,{fields:Object.keys(req.body).filter(k=>k!=='password')});res.json({ok:true});
  });
  app.post('/api/admin/users/:id/password',async(req,res)=>{
   const u=store.getUser(req.params.id);if(!u||u.role==='admin')return res.status(400).json({error:'只能重置普通用户'});
@@ -104,6 +112,6 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false}){
  // Only this directory is public; DB, source YAML and code are never served.
  app.use(express.static(publicDir,{index:'index.html',dotfiles:'deny',cacheControl:false}));
  app.use((_req,res)=>res.status(404).send('页面不存在'));
- app.use((err,_req,res,_next)=>{if(res.headersSent)return res.end();const known=/密码需为|账号需为/.test(err.message);res.status(known?400:err.type==='entity.too.large'?413:err.type==='entity.parse.failed'?400:500).json({error:known?err.message:'请求未完成，请检查输入或联系管理员'});});
+ app.use((err,_req,res,_next)=>{if(res.headersSent)return res.end();const known=err.statusCode===400||/密码需为|账号需为/.test(err.message);res.status(known?400:err.type==='entity.too.large'?413:err.type==='entity.parse.failed'?400:500).json({error:known?err.message:'请求未完成，请检查输入或联系管理员'});});
  return app;
 }

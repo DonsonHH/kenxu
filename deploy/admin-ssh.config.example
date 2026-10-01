@@ -8,3 +8,16 @@ Host donson-access
     ServerAliveCountMax 3
     ConnectTimeout 15
     LocalForward 127.0.0.1:4451 127.0.0.1:4451
+
+# Desktop launcher: install a dedicated restricted forwarding key first.
+Host kenxu-admin
+    HostName YOUR-JETSON-TAILSCALE-HOSTNAME
+    User jetson
+    IdentityFile ~/.ssh/kenxu_admin_ed25519
+    IdentitiesOnly yes
+    BatchMode yes
+    ProxyCommand "C:/Program Files/Tailscale/tailscale.exe" nc %h %p
+    ExitOnForwardFailure yes
+    ServerAliveInterval 15
+    ServerAliveCountMax 3
+    ConnectTimeout 15
