@@ -66,9 +66,10 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
   const u=req.user,allowed=new Set(JSON.parse(u.grants));
   const meters=store.meter.nodes();
   const enrollments=new Set(store.db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(u.id).map(n=>n.node_id));
-  res.json({username:u.username,role:u.role,mustChange:!!u.must_change,csrf:u.csrf,nodes:store.inventory().filter(n=>{const m=meters.find(m=>m.proxy_id===n.id);return allowed.has(n.id)&&(!m||m.enabled&&(m.kind!=='relay'||enrollments.has(m.id)));}).map(n=>({...n,metered:meters.some(m=>m.enabled&&m.proxy_id===n.id),kind:meters.find(m=>m.proxy_id===n.id)?.kind||'unmanaged'})),subscriptionUrl:!u.must_change&&u.role==='user'?`${subscriptionOrigin}/s/${store.subscription(u)}.yaml`:null,adminInterface:admin});
+  res.json({username:u.username,displayName:u.display_name||u.username,planName:u.plan_name||'好友共享',role:u.role,mustChange:!!u.must_change,csrf:u.csrf,nodes:store.inventory().filter(n=>{const m=meters.find(m=>m.proxy_id===n.id);return allowed.has(n.id)&&(!m||m.enabled&&(m.kind!=='relay'||enrollments.has(m.id)));}).map(n=>({...n,metered:meters.some(m=>m.enabled&&m.proxy_id===n.id),kind:meters.find(m=>m.proxy_id===n.id)?.kind||'unmanaged'})),subscriptionUrl:!u.must_change&&u.role==='user'?`${subscriptionOrigin}/s/${store.subscription(u)}.yaml`:null,adminInterface:admin});
  });
  app.get('/api/usage',(req,res)=>res.json(store.meter.usage(req.user.id)));
+ app.get('/api/nodes/status',(req,res)=>res.json({nodes:store.health.nodes(JSON.parse(req.user.grants)),checkIntervalMinutes:store.getSettings().healthCheckMinutes}));
  app.post('/api/logout',(req,res)=>{store.logout(tokens(req));res.set('Set-Cookie',cookie('',0));res.json({ok:true});});
  app.post('/api/password',async(req,res)=>{
   if(runningPasswords>=4||limited(`password:${req.user.id}`))return res.status(429).json({error:'请稍后重试'});
@@ -85,6 +86,7 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  app.get('/api/admin/state',(_req,res)=>res.json({users:store.listUsers().map(u=>({...u,meterNodes:store.db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(u.id).map(n=>n.node_id)})),nodes:store.inventory(),meterNodes:store.meter.nodes()}));
  app.get('/api/admin/audit',(req,res)=>res.json(store.auditPage(req.query.cursor)));
  app.get('/api/admin/usage',(_req,res)=>res.json({users:store.meter.users(),nodes:store.meter.nodes()}));
+ app.get('/api/admin/nodes/status',(_req,res)=>res.json({nodes:store.health.nodes(),checkIntervalMinutes:store.getSettings().healthCheckMinutes}));
  app.get('/api/admin/usage/users/:id',(req,res)=>{const u=store.getUser(req.params.id);if(!u||u.role!=='user')return res.sendStatus(404);res.json({id:u.id,username:u.username,displayName:u.display_name,...store.meter.usage(u.id)});});
  app.get('/api/admin/usage/nodes/:id',(req,res)=>{const data=store.meter.nodeUsage(req.params.id);if(!data)return res.sendStatus(404);res.json(data);});
  app.post('/api/admin/meter/users/:id/enroll',(req,res)=>{try{store.meter.allowUser(req.body?.nodeId,req.params.id);store.audit(req.user.username,'meter-enroll',req.params.id);res.json({ok:true});}catch{res.status(400).json({error:'用户或节点授权无效'});}});

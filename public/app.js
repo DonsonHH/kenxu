@@ -3,6 +3,7 @@ import {createAdminUI} from '/admin.js';
 const $=selector=>document.querySelector(selector);
 let me=null,adminState=null,adminUsage=null,timer=null,currentPanel='dashboard',usageTask=null,lastUsageAt=0;
 let realm={adminInterface:false,policy:{uiRefreshSeconds:UI_REFRESH_SECONDS}};
+let lastHealth=null;
 const routes={
  user:[['工作台','dashboard','仪表盘','dashboard'],['工作台','subscription','我的订阅','subscription'],['工作台','connections','节点状态','nodes'],['工作台','usage','流量明细','traffic'],['使用与账户','knowledge','使用文档','knowledge'],['使用与账户','account','个人中心','account']],
  admin:[['概览','dashboard','仪表盘','dashboard'],['用户与流量','accounts','用户管理','users'],['用户与流量','traffic','流量统计','traffic'],['连接管理','nodes','节点管理','nodes'],['系统','settings','系统设置','settings'],['系统','audit','操作日志','audit']]
@@ -17,6 +18,7 @@ function node(tag,text,className){const el=document.createElement(tag);if(text!=
 const icon=name=>window.portalIcon?.(name)||node('span');
 const adminUI=createAdminUI({api,node,bytes,time,tell,reload:load,getState:()=>adminState,getPanel:()=>currentPanel});
 function applyRealm(info){realm=info;document.body.classList.toggle('admin-shell',info.adminInterface);for(const span of document.querySelectorAll('.brand>span'))span.textContent=info.title;document.title=info.adminInterface?info.title+' · 私有管理后台':info.title;
+ document.body.classList.toggle('user-shell',!info.adminInterface);
  for(const f of ['#password-form','#user-form','#reset-form'])$(f).elements.password.minLength=info.policy.minPasswordLength;
  $('.password-card>p.muted').textContent='至少 '+info.policy.minPasswordLength+' 个字符。保存后重新登录，旧订阅链接失效。';
  const periodLabel=document.querySelector('.plan-meta span:last-child b');if(periodLabel)periodLabel.textContent=info.policy.subscriptionMinutes+' 分钟';
@@ -52,17 +54,18 @@ function resetUsage(){
  $('#plan-progress').value=0;$('#page-sync').textContent='';$('#usage-sync').textContent='读取中';$('#admin-usage-sync').textContent='读取中';
  for(const id of ['node-list','usage-routes','users-list','admin-usage-list','admin-nodes','audit-list','daily-list'])$('#'+id).replaceChildren();
  adminUsage=null;lastUsageAt=0;
+ lastHealth=null;for(const id of ['nodes-normal','nodes-failed'])$('#'+id).textContent='—';
  adminUI.reset();
  for(const id of ['welcome-name','account-name','identity','node-count'])$('#'+id).textContent='';
 }
 function routeCard(n,r,{admin=false}={}){
  const card=node(admin?'div':'li',undefined,'route-card'),top=node('div',undefined,'route-top'),info=node('div');
  info.append(node('strong',n.name,'route-title'),node('small',kindName(n.kind||r?.kind),'route-kind'));
- const online=admin?!!r?.enabled&&r.last_seen>Date.now()-90000:r?.online;
- const status=!r?'未接入计量':online?(admin?'近期有上报':r.synced?'采集正常':'权限同步中'):'采集暂离线';
- top.append(info,node('span',status,'chip '+(online?'online':'pending')));card.append(top);
- if(!admin){const values=node('div',undefined,'route-data');for(const [label,value]of [['上传',r?.up],['下载',r?.down]]){const item=node('span',label);item.append(node('strong',value===undefined?'—':bytes(value)));values.append(item);}card.append(values);}
- card.append(node('p','最近采样 · '+time(admin?r?.last_seen:r?.lastSeen),'fine'));return card;
+ const h=lastHealth?.nodes.find(h=>h.id===n.id),healthLabels={normal:'正常',failed:'异常',pending:'待检测',stale:'待更新',unsupported:'暂不支持'};
+ const online=admin?!!r?.enabled&&r.last_seen>Date.now()-90000:h?.status==='normal',status=admin?(!r?'未计量':online?'采集正常':'采集暂离线'):healthLabels[h?.status||'pending'];
+ top.append(info,node('span',status,'chip '+(online?'online':h?.status==='failed'?'failed':'pending')));card.append(top);
+ if(!admin){const values=node('div',undefined,'node-metrics');for(const [label,value]of [['检测响应',h?.latency===null||h?.latency===undefined?'—':h.latency+' ms'],['本月用量',r?total(r.month):'—']]){const item=node('span',label);item.append(node('strong',value));values.append(item);}card.append(values);const strip=node('div',undefined,'status-strip');strip.setAttribute('aria-label','最近连接检测结果');for(const sample of h?.history.slice(-24)||[]){const bar=node('span',undefined,sample.status);bar.title=time(sample.at)+' · '+(healthLabels[sample.status]||sample.status);strip.append(bar);}if(!strip.children.length)strip.append(node('span',undefined,'pending'));card.append(strip);}
+ card.append(node('p',(admin?'最近采样 · ':'Jetson 检测 · ')+time(admin?r?.last_seen:h?.checkedAt),'fine'));return card;
 }
 function renderDaily(rows){
  $('#daily-list').replaceChildren(...[...rows].reverse().map(r=>{const tr=node('tr');for(const value of [r.date,bytes(r.up),bytes(r.down),total(r)])tr.append(node('td',value));return tr;}));
@@ -85,13 +88,15 @@ function renderUsage(data){
   $('#collectors-stat').textContent=new Set(data.nodes.map(n=>n.agent_id)).size+' 个采集器';
   $('#admin-nodes').replaceChildren(...adminState.nodes.map(n=>{const m=data.nodes.find(m=>m.proxy_id===n.id),card=routeCard({...n,kind:m?.kind},m,{admin:true});if(m)adminUI.addNodeAmounts(card,m,data);return card;}));adminUI.onUsage();
  }else{
+  $('#nodes-normal').textContent=lastHealth?.nodes.filter(n=>n.status==='normal').length??'—';$('#nodes-failed').textContent=lastHealth?.nodes.filter(n=>n.status==='failed').length??'—';$('#nodes-check-description').textContent='由 Jetson 验证连接，每 '+(lastHealth?.checkIntervalMinutes||15)+' 分钟检测一次';
   const connected=data.routes.length>0,used=data.month.up+data.month.down,quota=data.allowance?.bytes||DISPLAY_ALLOWANCE_BYTES;
   for(const [id,value]of [['usage-today',data.today],['usage-month',data.month],['usage-total',data.total]])$('#'+id).textContent=connected?total(value):'—';
   $('#plan-used').textContent=connected?bytes(used):'—';$('#plan-percent').textContent=connected?(used/quota*100).toFixed(1)+'%':'未接入计量';$('#plan-progress').value=connected?Math.min(100,used/quota*100):0;
   $('#plan-quota').textContent='/ '+bytes(quota);
   $('#plan-progress').setAttribute('aria-valuetext',connected?(used/quota*100).toFixed(1)+'%，仅展示、不限制使用':'尚未接入计量');
   $('#period-label').textContent=data.period.label;$('#reset-date').textContent=new Date(data.period.end).toLocaleDateString('zh-CN',{timeZone:'Asia/Shanghai'});
-  $('#allowance-note').textContent=used>quota?'已超过展示额度，仍可继续使用；不会限流或停用。':'北京时间自然月 · 上传与下载合计，不包含 DIRECT 与旧共享凭据。';
+  $('#allowance-note').textContent=used>quota?'已超过展示额度，仍可继续使用。':'额度仅供参考，不限制使用。';
+  $('#account-allowance').textContent=bytes(quota)+' / 月';$('#account-subscription-interval').textContent=realm.policy.subscriptionMinutes+' 分钟';
   $('#usage-sync').textContent=!connected?'尚未接入计量':data.routes.some(r=>r.assigned&&r.online&&r.synced)?'采集正常 · 每 '+data.uiRefreshIntervalSeconds+' 秒刷新':'等待同步 · 保留历史';
   $('#node-list').replaceChildren(...me.nodes.map(n=>routeCard(n,data.routes.find(r=>r.id===n.id))));
   if(!me.nodes.length)$('#node-list').append(node('li','尚未分配线路，请联系 Donson。','notice'));
@@ -106,8 +111,8 @@ async function refreshUsage({force=false,propagate=false}={}){
  if(!force&&Date.now()-lastUsageAt<(realm.policy.uiRefreshSeconds||UI_REFRESH_SECONDS)*1000)return;
  const task={identity};
  task.promise=(async()=>{try{
-  const data=await api(identity.role==='admin'?'/api/admin/usage':'/api/usage');
-  if(me!==identity)return;renderUsage(data);lastUsageAt=Date.now();
+  const [data,health]=await Promise.all([api(identity.role==='admin'?'/api/admin/usage':'/api/usage'),api(identity.role==='admin'?'/api/admin/nodes/status':'/api/nodes/status').catch(()=>null)]);
+  if(me!==identity)return;lastHealth=health;renderUsage(data);lastUsageAt=Date.now();
  }catch(err){if(me===identity){$(identity.role==='admin'?'#admin-usage-sync':'#usage-sync').textContent='更新失败 · 数据可能过期';$('#page-sync').textContent='等待重新连接';}throw err;}
  finally{if(usageTask===task)usageTask=null;}})();usageTask=task;try{return await task.promise;}catch(err){if(propagate)throw err;}
 }
@@ -131,7 +136,7 @@ async function load(){
  if(me.mustChange){$('#password-title').textContent='首次登录，请修改初始密码';$('#password-back').hidden=true;show('password-view');return;}
  show(me.role==='admin'?'admin-view':'user-view');navigation();
  if(me.role==='admin'){await loadAdmin();}else{
-  $('#welcome-name').textContent=me.username;$('#account-name').textContent=me.username;$('#node-count').textContent=me.nodes.length+' 条线路';
+  $('#welcome-name').textContent=me.displayName||me.username;$('#account-name').textContent=me.username;$('#plan-name').textContent=me.planName||'好友共享';$('#node-count').textContent=me.nodes.length+' 条线路';
   $('#empty-grants').hidden=!!me.nodes.length;$('#delivery').hidden=!me.nodes.length;$('#subscription').value=me.subscriptionUrl||'';$('#subscription').type='password';$('#show-sub').textContent='显示';$('#show-sub').setAttribute('aria-pressed','false');
   if(me.subscriptionUrl)$('#import-clash').href='clash://install-config?url='+encodeURIComponent(me.subscriptionUrl)+'&name=Kenxu';
   $('#node-list').replaceChildren(...me.nodes.map(n=>routeCard(n)));

@@ -5,6 +5,7 @@ import {mkdirSync,readFileSync,writeFileSync,chmodSync} from 'node:fs';
 import path from 'node:path';
 import {parseSource,inventory,generateConfig} from './config.mjs';
 import {createMeter} from './meter.mjs';
+import {createHealth} from './health.mjs';
 import {DEFAULT_SETTINGS,validateSettings,invalid} from './settings.mjs';
 const scrypt=promisify(rawScrypt);
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -28,7 +29,7 @@ export function openStore(directory){
  if(key.length!==32)throw Error('Invalid subscription key');
  const dbPath=path.join(directory,'portal.sqlite');
  const db=new DatabaseSync(dbPath);chmodSync(dbPath,0o600);
- db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL;
+ db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
  CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, username TEXT NOT NULL UNIQUE, password TEXT NOT NULL, role TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, must_change INTEGER NOT NULL DEFAULT 1, grants TEXT NOT NULL, version TEXT NOT NULL, created INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), csrf TEXT NOT NULL, expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -107,5 +108,6 @@ export function openStore(directory){
   config(u){const s=source();if(!s)throw Error('管理员尚未导入配置');return generateConfig(store.meter.overrideSource(s,u),JSON.parse(u.grants));},
  };
  store.meter=createMeter(store);
+ store.health=createHealth(store);
  return store;
 }
