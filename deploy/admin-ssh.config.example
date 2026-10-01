@@ -1,0 +1,10 @@
+# Copy to admin-ssh.config (ignored by Git), then replace the hostname.
+Host donson-access
+    HostName YOUR-JETSON-TAILSCALE-HOSTNAME
+    User jetson
+    ProxyCommand "C:/Program Files/Tailscale/tailscale.exe" nc %h %p
+    ExitOnForwardFailure yes
+    ServerAliveInterval 15
+    ServerAliveCountMax 3
+    ConnectTimeout 15
+    LocalForward 127.0.0.1:4451 127.0.0.1:4451

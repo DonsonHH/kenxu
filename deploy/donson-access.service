@@ -1,0 +1,28 @@
+[Unit]
+Description=Donson private configuration portal
+After=network.target
+
+[Service]
+Type=simple
+User=jetson
+Group=jetson
+WorkingDirectory=/home/jetson/donson-access/current
+Environment=NODE_ENV=production
+Environment=DATA_DIR=/home/jetson/donson-access/private-data
+Environment=PUBLIC_ORIGIN=https://kenxu.donson.top
+Environment=ADMIN_ORIGIN=http://127.0.0.1:4451
+Environment=PORT=4450
+Environment=ADMIN_PORT=4451
+ExecStart=/usr/bin/node /home/jetson/donson-access/current/src/server.mjs
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/jetson/donson-access/private-data
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

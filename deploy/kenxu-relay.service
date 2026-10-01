@@ -1,0 +1,20 @@
+[Unit]
+Description=Kenxu private authenticated third-party relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=jetson
+Group=jetson
+ExecStart=/usr/local/bin/xray run -config /usr/local/etc/kenxu-relay/config.json
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

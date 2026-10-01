@@ -1,0 +1,28 @@
+{
+  "name": "kenxu",
+  "private": true,
+  "type": "module",
+  "version": "0.2.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "admin": "node --env-file-if-exists=.env src/admin.mjs",
+    "build": "node scripts/build.mjs",
+    "test:browser": "node test/browser.mjs && node test/xboard-ui.mjs"
+  },
+  "dependencies": {
+    "express": "5.2.1",
+    "lucide": "1.49.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "sonner": "2.0.8",
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "1.63.0"
+  }
+}

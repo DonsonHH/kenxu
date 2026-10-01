@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Donson — Dawn D</title>
+  <desc id="desc">An ivory geometric D with an amber sunrise arc on midnight blue.</desc>
+  <rect width="256" height="256" rx="64" fill="#142334"/>
+  <path d="M68 52h52c44 0 80 34 80 76s-36 76-80 76H68V52Zm28 28v96h24c29 0 52-21 52-48s-23-48-52-48H96Z" fill="#F5F0E6" fill-rule="evenodd"/>
+  <path d="M128 52.4c36.9 3.5 66.4 30.5 71.3 65.6h-28.4c-4.4-20-21.1-35.1-42.9-37.5V52.4Z" fill="#E8B879"/>
+  <path d="m68 204 28-28v28H68Z" fill="#C5D2D9"/>
+</svg>

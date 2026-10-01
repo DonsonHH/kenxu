@@ -1,0 +1,50 @@
+import {chromium} from 'playwright';
+import {mkdtemp,mkdir,rm,writeFile} from 'node:fs/promises';
+import path from 'node:path';
+import {tmpdir} from 'node:os';
+import assert from 'node:assert/strict';
+import YAML from 'yaml';
+import {openStore} from '../src/store.mjs';
+import {createApp} from '../src/app.mjs';
+const dir=await mkdtemp(path.join(tmpdir(),'kenxu-xboard-ui-')),store=openStore(dir),servers=[],errors=[];
+let browser;const realNow=Date.now;
+const names=['Singapore 1','Singapore 2','Singapore 3','US 1','US 2','Glasgow · TCP','Japan · Relay','Los Angeles · Relay'];
+try{
+ Date.now=()=>realNow()-30*86400000;
+ store.importSource(YAML.stringify({proxies:names.map(name=>({name,type:'vless',server:'fixture.example',port:443,uuid:'fictional-source'})),rules:['MATCH,'+names[0]]}));
+ const registrations=store.inventory().map(n=>store.meter.register(n.id,n.name));
+ const a=await store.createUser('sample_user','fixture-sample-password',store.inventory().map(n=>n.id)),b=await store.createUser('second_user','fixture-second-password',[store.inventory()[0].id]);
+ await store.setPassword(a,'fixture-sample-password');await store.setPassword(b,'fixture-second-password');await store.createUser('sample_owner','fixture-owner-password',[],'admin');
+ for(let day=1;day<=30;day++){
+  Date.now=()=>realNow()-(30-day)*86400000;
+  for(let i=0;i<registrations.length;i++){const agent=store.meter.authenticate(registrations[i].token),desired=store.meter.desired(agent);
+   store.meter.report(agent,{epoch:'fixture',seq:day,at:Date.now(),revision:desired.revision,counters:desired.clients.map(c=>({email:c.email,up:c.email.includes(a)?day*1000000*(i+1):0,down:c.email.includes(a)?day*32000000*(i+1):0}))});
+  }
+ }
+ Date.now=realNow;
+ const start=async admin=>{const provisional=createApp({store,origin:'http://127.0.0.1:4450',admin}).listen(0,'127.0.0.1');await new Promise(r=>provisional.once('listening',r));const port=provisional.address().port;await new Promise(r=>provisional.close(r));const origin='http://127.0.0.1:'+port,s=createApp({store,origin,admin}).listen(port,'127.0.0.1');await new Promise(r=>s.once('listening',r));servers.push(s);return origin;};
+ const userOrigin=await start(false),adminOrigin=await start(true);
+ browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});await mkdir('test-output/xboard',{recursive:true});
+ async function login(page,origin,username,password){page.on('pageerror',e=>errors.push(e.message));await page.goto(origin);await page.locator('#login-form [name=username]').fill(username);await page.locator('#login-form [name=password]').fill(password);await page.getByRole('button',{name:'登录并领取配置'}).click();await page.waitForFunction(()=>document.querySelector('#page-sync').textContent.startsWith('更新于'));}
+ const page=await browser.newPage({viewport:{width:1440,height:1000}});await page.clock.install();let usageRequests=0;page.on('request',r=>{if(new URL(r.url()).pathname==='/api/usage')usageRequests++;});
+ await login(page,userOrigin,'sample_user','fixture-sample-password');assert.ok((await page.locator('#plan-used').innerText()).includes('GB'));
+ await page.screenshot({path:'test-output/xboard/01-dashboard.png',fullPage:true});
+ for(const [title,panel]of [['我的订阅','subscription'],['节点状态','connections'],['流量明细','usage'],['使用文档','knowledge'],['个人中心','account']]){await page.getByRole('button',{name:title,exact:true}).click();assert.equal(await page.locator('#page-heading').innerText(),title);assert.equal(await page.locator('#user-view [data-panel="'+panel+'"]').isVisible(),true);}
+ assert.equal(await page.locator('#node-list .route-card').count(),8);assert.equal(await page.locator('#daily-list tr').count(),30);
+ await page.getByRole('button',{name:'我的订阅',exact:true}).click();assert.match(await page.locator('#import-clash').getAttribute('href'),/^clash:\/\/install-config\?url=/);
+ const link=await page.locator('#subscription').inputValue(),response=await fetch(link);assert.equal(response.headers.get('profile-update-interval'),'12');assert.match(response.headers.get('subscription-userinfo'),/total=107374182400/);
+ await page.screenshot({path:'test-output/xboard/02-subscription.png',fullPage:true});await page.getByRole('button',{name:'仪表盘',exact:true}).click();
+ const before=usageRequests;await page.clock.fastForward(59000);assert.equal(usageRequests,before);await page.clock.fastForward(2000);await page.waitForFunction(()=>document.querySelector('#page-sync').textContent.startsWith('更新于'));await new Promise(r=>setTimeout(r,200));assert.equal(usageRequests,before+1);
+ await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('#sidebar').getBoundingClientRect().right<=1);await page.screenshot({path:'test-output/xboard/03-mobile.png',fullPage:true});
+ await page.getByRole('button',{name:'打开导航',exact:true}).click();await page.clock.fastForward(200);assert.equal(await page.locator('#content').evaluate(e=>e.inert),true);await page.keyboard.press('Escape');assert.equal(await page.locator('#menu-toggle').getAttribute('aria-expanded'),'false');
+ await page.getByRole('button',{name:'打开导航',exact:true}).click();await page.getByRole('button',{name:'我的订阅',exact:true}).click();assert.equal(await page.locator('#menu-backdrop').isVisible(),false);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await page.getByRole('button',{name:'退出',exact:true}).click();await page.locator('#login-view').waitFor();assert.equal(await page.locator('#subscription').inputValue(),'');assert.equal(await page.locator('#usage-month').innerText(),'—');
+ await login(page,userOrigin,'second_user','fixture-second-password');assert.equal(await page.locator('#plan-used').innerText(),'0 B');assert.equal(await page.locator('#node-list .route-card').count(),1);
+ const admin=await browser.newPage({viewport:{width:1440,height:1000}});await login(admin,adminOrigin,'sample_owner','fixture-owner-password');
+ await admin.screenshot({path:'test-output/xboard/04-admin-dashboard.png',fullPage:true});
+ for(const title of ['用户管理','流量统计','节点管理','系统设置','操作日志']){await admin.getByRole('button',{name:title,exact:true}).click();assert.equal(await admin.locator('#page-heading').innerText(),title);}
+ await admin.getByRole('button',{name:'用户管理',exact:true}).click();await admin.locator('#search-users').fill('second');assert.equal(await admin.locator('#users-list .user-row').count(),1);await admin.locator('#search-users').fill('');
+ await admin.getByRole('button',{name:'流量统计',exact:true}).click();await admin.locator('#traffic-search').fill('second');assert.equal(await admin.locator('#admin-usage-list .user-row').count(),1);await admin.locator('#traffic-search').fill('');await admin.screenshot({path:'test-output/xboard/05-admin-traffic.png',fullPage:true});
+ assert.deepEqual(errors,[]);await writeFile('test-output/xboard/result.json',JSON.stringify({pass:true,userSections:6,adminSections:6,refreshSeconds:60,monthlyHeaders:true,accountIsolation:true,mobileOverflow:false,errors}));
+ console.log('PASS: Xboard-style user/admin navigation, monthly metadata, 60-second refresh, filters, 390px drawer/keyboard/layout and account-switch isolation');
+}finally{Date.now=realNow;await browser?.close();for(const s of servers){s.closeAllConnections();await new Promise(r=>s.close(r));}store.close();await rm(dir,{recursive:true,force:true});}

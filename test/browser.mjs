@@ -1,0 +1,31 @@
+import {chromium} from 'playwright';
+import {mkdtemp,mkdir,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import net from 'node:net';
+import assert from 'node:assert/strict';
+import {openStore} from '../src/store.mjs';
+import {createApp} from '../src/app.mjs';
+const freePort=()=>new Promise(resolve=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>resolve(p));});});
+const dir=await mkdtemp(path.join(tmpdir(),'donson-ui-test-')),store=openStore(dir),servers=[];
+let browser;
+try{
+ store.importSource('proxies:\n  - {name: "示例节点 A", type: vless, server: a.example, port: 443, uuid: fixture-a}\n  - {name: "示例节点 B", type: vless, server: b.example, port: 443, uuid: fixture-b}\nproxy-groups:\n  - {name: 主选择, type: select, proxies: ["示例节点 A", "示例节点 B"]}\nrules: ["MATCH,主选择"]\n');
+ await store.createUser('owner','owner-fixture-password',[],'admin');
+ const publicPort=await freePort(),adminPort=await freePort(),publicOrigin=`http://127.0.0.1:${publicPort}`,adminOrigin=`http://127.0.0.1:${adminPort}`;
+ for(const [app,port] of [[createApp({store,origin:publicOrigin}),publicPort],[createApp({store,origin:adminOrigin,subscriptionOrigin:publicOrigin,admin:true}),adminPort]]){const s=app.listen(port,'127.0.0.1');await new Promise(resolve=>s.once('listening',resolve));servers.push(s);}
+ browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHANNEL?{channel:process.env.PLAYWRIGHT_CHANNEL}:{})});await mkdir('test-output',{recursive:true});
+ const admin=await browser.newPage({viewport:{width:1280,height:900}});const errors=[];admin.on('pageerror',e=>errors.push(e.message));
+ await admin.goto(adminOrigin);await admin.locator('#login-form input[name="username"]').fill('owner');await admin.locator('#login-form input[name="password"]').fill('owner-fixture-password');await admin.getByRole('button',{name:'登录并领取配置'}).click();await admin.locator('#admin-view').waitFor();await admin.getByRole('button',{name:'用户管理',exact:true}).click();
+ await admin.getByRole('button',{name:'创建账号',exact:true}).click();await admin.locator('#user-form input[name="username"]').fill('friend01');await admin.locator('#user-form input[name="password"]').fill('friend-fixture-password');await admin.getByLabel('示例节点 A',{exact:true}).check();await admin.getByRole('button',{name:'保存账号',exact:true}).click();await admin.locator('#users-list .user-row').filter({hasText:'friend01'}).waitFor();await admin.screenshot({path:'test-output/01-admin.png',fullPage:true});
+ const page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));await page.goto(publicOrigin);await page.screenshot({path:'test-output/02-login.png',fullPage:true});
+ await page.locator('#login-form input[name="username"]').fill('friend01');await page.locator('#login-form input[name="password"]').fill('friend-fixture-password');await page.getByRole('button',{name:'登录并领取配置'}).click();await page.getByRole('heading',{name:'首次登录，请修改初始密码'}).waitFor();
+ await page.locator('#password-form input[name="currentPassword"]').fill('friend-fixture-password');await page.locator('#password-form input[name="password"]').fill('friend-updated-password');await page.locator('#password-form input[name="confirm"]').fill('friend-updated-password');await page.getByRole('button',{name:'保存新密码'}).click();await page.locator('#login-view').waitFor();
+ await page.locator('#login-form input[name="username"]').fill('friend01');await page.locator('#login-form input[name="password"]').fill('friend-updated-password');await page.getByRole('button',{name:'登录并领取配置'}).click();await page.locator('#user-view').waitFor();await page.getByRole('button',{name:'我的订阅',exact:true}).click();assert.equal(await page.locator('#node-list li').count(),1);
+ const downloadEvent=page.waitForEvent('download');await page.getByRole('link',{name:'下载 YAML'}).click();const download=await downloadEvent;const stream=await download.createReadStream();let yaml='';for await(const chunk of stream)yaml+=chunk;assert.ok(yaml.includes('fixture-a'));assert.ok(!yaml.includes('fixture-b'));
+ await page.getByRole('button',{name:'仪表盘',exact:true}).click();await page.screenshot({path:'test-output/03-user.png',fullPage:true});await page.setViewportSize({width:390,height:844});await page.waitForFunction(()=>document.querySelector('#sidebar').getBoundingClientRect().right<=1);await page.screenshot({path:'test-output/04-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+ await page.getByRole('button',{name:'打开导航',exact:true}).click();await page.getByRole('button',{name:'节点状态',exact:true}).click();assert.ok((await page.locator('#node-list').innerText()).includes('示例节点 A'));assert.ok(!(await page.locator('#node-list').innerText()).includes('示例节点 B'));await page.screenshot({path:'test-output/05-connections-mobile.png',fullPage:true});
+ await page.getByRole('button',{name:'打开导航',exact:true}).click();await page.getByRole('button',{name:'我的订阅',exact:true}).click();await page.getByText('订阅安全与重置',{exact:true}).click();const oldToken=await page.locator('#subscription').inputValue();page.once('dialog',d=>d.accept());await page.getByRole('button',{name:'重置订阅链接',exact:true}).click();await page.waitForFunction(old=>document.querySelector('#subscription').value!==old,oldToken);assert.equal((await fetch(oldToken)).status,404);
+ await admin.locator('#users-list .user-row').getByRole('button',{name:'编辑权限'}).click();await admin.getByLabel('允许登录与领取').uncheck();await admin.getByRole('button',{name:'保存账号',exact:true}).click();await admin.locator('#users-list .user-row').filter({hasText:'已停用'}).waitFor();const newToken=await page.locator('#subscription').inputValue();assert.equal((await fetch(newToken)).status,404);await page.reload();await page.locator('#login-view').waitFor();assert.deepEqual(errors,[]);
+ console.log('PASS: administrator creates and assigns, first-password change, user download isolation, subscription rotation, disable, 390px layout; no page exceptions');
+}finally{await browser?.close();for(const s of servers){s.closeAllConnections();await new Promise(resolve=>s.close(resolve));}store.close();await rm(dir,{recursive:true,force:true});}

@@ -1,0 +1,19 @@
+[Unit]
+Description=Kenxu durable third-party relay accounting
+After=network-online.target kenxu-relay.service
+Wants=network-online.target
+
+[Service]
+User=root
+ExecStart=/usr/bin/python3 /usr/local/lib/kenxu-meter/kenxu_meter.py
+Restart=on-failure
+RestartSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/kenxu-meter /usr/local/etc/kenxu-relay
+
+[Install]
+WantedBy=multi-user.target
