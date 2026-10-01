@@ -10,3 +10,4 @@ await build({entryPoints:['src/notifications.jsx'],outfile:'public/notifications
 await copyFile('node_modules/sonner/dist/styles.css','public/notifications.css');
 await copyFile('src/policy.mjs','public/policy.js');
 await build({entryPoints:['src/icons.mjs'],outfile:'public/icons.js',bundle:true,minify:true,format:'iife',legalComments:'eof'});
+await build({entryPoints:['src/charts.mjs'],outfile:'public/charts.js',bundle:true,minify:true,format:'iife',legalComments:'eof'});

@@ -42,6 +42,7 @@ function selectPanel(id,{focus=false}={}){
  if(location.hash!=='#'+id)history.replaceState(null,'','#'+id);
  mobileMenu(false,false);if(focus)$('#page-heading').focus();
  if(me.role==='admin')adminUI.onPanel(id);
+ window.portalCharts?.render();
 }
 function navigation(){
  let group;const entries=routes[me.role],parts=[];
@@ -55,6 +56,7 @@ function resetUsage(){
  for(const id of ['node-list','usage-routes','users-list','admin-usage-list','admin-nodes','audit-list','daily-list'])$('#'+id).replaceChildren();
  adminUsage=null;lastUsageAt=0;
  lastHealth=null;for(const id of ['nodes-normal','nodes-failed'])$('#'+id).textContent='—';
+ window.portalCharts?.clear();
  adminUI.reset();
  for(const id of ['welcome-name','account-name','identity','node-count'])$('#'+id).textContent='';
 }
@@ -79,6 +81,7 @@ function renderTraffic(){
  if(!users.length)$('#admin-usage-list').append(node('p','暂无匹配的用量记录。','muted'));
 }
 function renderUsage(data){
+ window.portalCharts?.update(data,lastHealth,me.role);
  $('#page-sync').textContent='更新于 '+new Date().toLocaleTimeString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false});
  if(me.role==='admin'){
   adminUsage=data;renderTraffic();$('#admin-usage-sync').textContent='每 '+realm.policy.uiRefreshSeconds+' 秒刷新';$('#admin-sync').textContent='每 '+realm.policy.uiRefreshSeconds+' 秒刷新';

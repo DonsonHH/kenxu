@@ -9,7 +9,8 @@ Private subscription and traffic-accounting portal for trusted friends. Built an
 - Optional Jetson WebSocket gateway for third-party nodes, without exposing provider credentials to friends.
 - Monthly usage displayed in Clash Verge using subscription response headers.
 - 100 GB display allowance only: **no traffic restriction, speed limit or automatic suspension**.
-- Subscription refresh recommendation: 720 minutes; website polling: 60 seconds. Node sampling remains 15 seconds.
+- Subscription refresh recommendation: 720 minutes; website polling: 60 seconds. Traffic counter sampling remains 15 seconds; independent Jetson exit checks default to 15 minutes.
+- Distinct teal user/violet admin workspaces, with locally bundled charts for daily usage, route shares, rankings, connection results and infrastructure resources.
 - Separate loopback user/admin servers, scrypt password hashes, HttpOnly/SameSite sessions, CSRF/Origin checks and private/no-store subscription responses.
 
 ## Private management console
@@ -17,6 +18,10 @@ Private subscription and traffic-accounting portal for trusted friends. Built an
 The administrator port uses a distinct **Kenxu Control** identity. It supports editable ordinary-user usernames, display names, contact emails, administrator-only notes, labels, display allowance overrides and optional account expiry. Rename revokes existing user sessions/subscription links while retaining accounting identities. Expiry is checked at login, session/subscription use and node client synchronization; it is not a traffic quota.
 
 User and node rows open detailed upload/download breakdowns and 30-day daily records. Settings persist validated site/admin titles, website and subscription intervals, default display GB, password floor, new-session duration, and monitoring source/cache policy. Existing accounts/default intervals are preserved unless explicitly edited.
+
+The user workspace shows only the account's own data and granted nodes. Node state comes from `kenxu-node-checks.service`: bounded authenticated HTTPS requests through each private source proxy from Jetson, not collector heartbeat. Administrators can set the check interval from 5 to 120 minutes. Source changes and stale samples are not shown as normal. The checker tests the source exit path; it does not certify a visitor's ISP or the public gateway edge. See [the user/connectivity review](docs/user-stage1-review.md).
+
+Chart.js is bundled locally without a CDN. Changing the user's 7/30-day chart view does not send another request. Hidden panels are rendered on demand, unchanged snapshots reuse charts, and missing readings remain unknown instead of being invented as zero. Admin resource charts reuse the read-only monitor cache and are not exposed to ordinary users. See [the semifinal review](docs/charts-semifinal-review.md).
 
 The monitoring adapter is read-only and uses an operator-provided HTTPS root plus the server-side `MONITOR_ALLOWED_ORIGINS` allowlist (comma-separated origins). It caches a bounded public bootstrap response, returns selected CPU/memory/disk/network/uptime fields only, and does not weaken monitoring-site frame protections. Infrastructure period totals are not per-user proxy usage.
 
@@ -49,7 +54,7 @@ Administrator passwords are entered privately in an interactive terminal, never 
 
 Set an exact HTTPS `PUBLIC_ORIGIN`, the loopback `ADMIN_ORIGIN`, and an absolute private `DATA_DIR`. The service refuses implicit production defaults. Both listeners bind to `127.0.0.1`; publish **only the user port** through the HTTP Tunnel. Use a private SSH port forward for administration. Example service units are in `deploy/`; adapt user/path/origin values for your host.
 
-Meter nodes require private registration and a compatible local collector. The optional reusable collector/playbook lives in [DonsonHH/my-ansible-playbooks](https://github.com/DonsonHH/my-ansible-playbooks). Register each physical core once; attach forwarded logical routes to the same physical agent. The UK SOCKS relay is TCP-only. Third-party gateways need private upstream configuration, a loopback API, and a fixed-path authenticated VLESS/WebSocket inlet; adding a node to a YAML file alone does not install these components.
+Meter nodes require private registration and a compatible local collector. The optional reusable collector/playbook lives in [DonsonHH/my-ansible-playbooks](https://github.com/DonsonHH/my-ansible-playbooks). Register each physical core once; attach forwarded logical routes to the same physical agent. The UK SOCKS relay is TCP-only. Third-party gateways need private upstream configuration, a loopback API, and a fixed-path authenticated VLESS/WebSocket inlet; adding a node to a YAML file alone does not install these components. To enable cached source exit checks, install the example `deploy/kenxu-node-checks.service` with private `DATA_DIR`, Xray and curl available on Jetson.
 
 Only managed, authorized routes get independent credentials. Old shared credentials, DIRECT and bypassed routes cannot be attributed to a friend. Source file replacement does not update a third-party gateway's upstream automatically. Collector heartbeats are not end-to-end node health tests. Short polling does not guarantee lossless accounting after an abrupt core crash.
 
