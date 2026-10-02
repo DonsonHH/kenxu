@@ -2,6 +2,7 @@ import {UI_REFRESH_SECONDS,DISPLAY_ALLOWANCE_BYTES} from '/policy.js';
 import {createAdminUI} from '/admin.js';
 import {pointerMotion,revealPanel} from '/motion.js';
 import {CLIENTS,detectPlatform,clientImport} from '/client-imports.js';
+import {createGuideUI} from '/guide-ui.js';
 const $=selector=>document.querySelector(selector);
 let me=null,adminState=null,adminUsage=null,timer=null,currentPanel='dashboard',usageTask=null,lastUsageAt=0;
 let realm={adminInterface:false,policy:{uiRefreshSeconds:UI_REFRESH_SECONDS}};
@@ -21,8 +22,9 @@ function bytes(value){if(value<1024)return value+' B';const units=['KB','MB','GB
 function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;}
 const icon=name=>window.portalIcon?.(name)||node('span');
 const detectedPlatform=detectPlatform(navigator);let selectedClient=detectedPlatform==='ios'?'shadowrocket':detectedPlatform==='android'?'clash-meta':'clash-verge';
-try{const saved=localStorage.getItem('kenxu-client');if(CLIENTS[saved])selectedClient=saved;}catch{}
-function guidePlatform(platform){for(const section of document.querySelectorAll('[data-device-guide]'))section.hidden=section.dataset.deviceGuide!==platform;for(const button of document.querySelectorAll('[data-guide-platform]'))button.setAttribute('aria-pressed',String(button.dataset.guidePlatform===platform));}
+try{const saved=localStorage.getItem('kenxu-client');if(Object.hasOwn(CLIENTS,saved))selectedClient=saved;}catch{}
+const guideUI=createGuideUI({root:$('#user-view [data-panel="knowledge"]'),reveal:revealPanel,onImport:client=>{if(!Object.hasOwn(CLIENTS,client))return;selectedClient=client;try{localStorage.setItem('kenxu-client',client);}catch{}updateDelivery();selectPanel('subscription',{focus:true});tell('已选择 '+CLIENTS[client].name+'，请在客户端确认导入。','info');}});
+function guidePlatform(platform){guideUI.select(platform,{client:selectedClient});}
 function updateDelivery(){
  const choice=$('#client-choice');choice.value=selectedClient;guidePlatform(CLIENTS[selectedClient].platform);
  const link=$('#import-clash');link.replaceChildren(icon('subscription'),node('span','导入 '+CLIENTS[selectedClient].name));
@@ -70,6 +72,7 @@ function navigation(){
 }
 function resetUsage(){
  rendered.clear();
+ guideUI.reset();
  for(const id of ['usage-today','usage-month','usage-total','plan-used','plan-percent','period-label','reset-date','admin-month-up','admin-month-down','admin-today','admin-total','fresh-routes'])$('#'+id).textContent='—';
  $('#plan-progress').value=0;$('#page-sync').textContent='';$('#usage-sync').textContent='读取中';$('#admin-usage-sync').textContent='读取中';
  for(const id of ['node-list','usage-routes','users-list','admin-usage-list','admin-nodes','audit-list','daily-list'])$('#'+id).replaceChildren();
@@ -208,7 +211,6 @@ let copyReset;
 $('#copy-sub').onclick=async()=>{if(!me?.subscriptionUrl||me.mustChange)return;try{await navigator.clipboard.writeText($('#subscription').value);const button=$('#copy-sub');button.classList.add('copied');button.replaceChildren(icon('check'),node('span','已复制'));clearTimeout(copyReset);copyReset=setTimeout(()=>{button.classList.remove('copied');button.replaceChildren(icon('copy'),node('span','复制订阅链接'));},1800);tell('订阅链接已复制，请勿转发。');}catch{$('#subscription').type='text';$('#subscription').select();$('#show-sub').textContent='隐藏';$('#show-sub').setAttribute('aria-pressed','true');tell('已展开链接，请手动复制。','info');}};
 $('#client-choice').onchange=event=>{selectedClient=event.target.value;try{localStorage.setItem('kenxu-client',selectedClient);}catch{}updateDelivery();};
 $('#import-clash').addEventListener('click',event=>{if(!me?.subscriptionUrl||me.mustChange){event.preventDefault();return;}tell('请在客户端确认导入；未打开时可复制链接手动添加。','info');});
-document.addEventListener('click',event=>{const button=event.target.closest('[data-guide-platform]');if(button)guidePlatform(button.dataset.guidePlatform);});
 guidePlatform(CLIENTS[selectedClient].platform);
 $('#show-sub').onclick=()=>{const visible=$('#subscription').type==='password';$('#subscription').type=visible?'text':'password';$('#show-sub').textContent=visible?'隐藏':'显示';$('#show-sub').setAttribute('aria-pressed',String(visible));};
 $('#rotate-sub').onclick=()=>{if(!confirm('重置后旧订阅链接立即失效，已下载的节点凭据不变。继续吗？'))return;action($('#rotate-sub'),async()=>{await api('/api/subscription/rotate',{method:'POST'});await load();},{loading:'正在重置…',success:'订阅已重置，请替换客户端中的链接。',error:e=>e.message});};

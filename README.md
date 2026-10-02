@@ -6,7 +6,7 @@
 
 管理员集中维护线路、分配账号与权限；用户登录后领取自己的配置，查看用量和连接状态。Kenxu 使用 Node.js 与 SQLite，当前部署运行在 Jetson 上，通过 Cloudflare Tunnel 提供 HTTPS 访问，管理后台经私有 SSH 转发访问。
 
-当前代码版本 **1.2.0** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
+当前代码版本 **1.2.1** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
 
 ## 界面预览
 
@@ -142,7 +142,7 @@ docs/         用户指南、部署维护、版本 review 与界面截图
 
 欢迎通过 [Issues](https://github.com/DonsonHH/kenxu/issues) 提交问题和改进建议。描述版本、复现步骤、预期与实际结果，截图及日志请先移除账号凭据。涉及安全问题时，请先联系维护者确认私下报告方式。
 
-提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md) 和[移动端适配](docs/review-mobile-v1.2.0.md)。
+提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md)、[移动端适配](docs/review-mobile-v1.2.0.md) 和[教程交互优化](docs/review-guide-v1.2.1.md)。
 
 ## 致谢与许可
 
