@@ -4,6 +4,7 @@ import {passwordMatches,passwordHash} from './store.mjs';
 import {createMonitorReader} from './monitor.mjs';
 import {VERSION} from './version.mjs';
 import {createAuthGuard,clientAddress} from './auth-guard.mjs';
+import {shadowrocketSubscription,stashConfiguration} from './mobile-subscription.mjs';
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
 const badPassword=await passwordHash('dummy-password-not-an-account');
 export function createApp({store,origin,subscriptionOrigin=origin,admin=false,monitorReader,trustCloudflare=false}){
@@ -27,11 +28,14 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  app.use(express.json({limit:'600kb',strict:true}));
  app.get('/healthz',(_req,res)=>res.json({ok:true,interface:admin?'admin':'user',version:VERSION}));
  app.get('/api/interface',(_req,res)=>res.json({adminInterface:admin,title:admin?store.getSettings().adminTitle:store.getSettings().siteName,version:VERSION,policy:store.publicPolicy()}));
- const sendConfig=(res,user)=>{
+ const sendConfig=(res,user,format)=>{
+  if(format!==undefined&&!['shadowrocket','stash'].includes(format))return res.status(400).json({error:'不支持的订阅格式'});
   const configuration=store.config(user),month=store.meter.totals(user.id).month;
-  res.set({'Content-Type':'text/yaml; charset=utf-8','Content-Disposition':'attachment; filename="Kenxu.yaml"',
+  const mobile=format==='shadowrocket',body=mobile?shadowrocketSubscription(configuration):format==='stash'?stashConfiguration(configuration):configuration;
+  res.set({'Content-Type':mobile?'text/plain; charset=utf-8':'text/yaml; charset=utf-8','Content-Disposition':'attachment; filename="'+(mobile?'Kenxu.txt':'Kenxu.yaml')+'"',
+   'Profile-Title':'Kenxu',
    'profile-update-interval':String(store.getSettings().subscriptionMinutes/60),'profile-web-page-url':subscriptionOrigin,
-   'subscription-userinfo':`upload=${month.up}; download=${month.down}; total=${store.displayBytes(user)}${user.expires_at?'; expire='+Math.floor(user.expires_at/1000):''}`}).send(configuration);
+   'subscription-userinfo':`upload=${month.up}; download=${month.down}; total=${store.displayBytes(user)}${user.expires_at?'; expire='+Math.floor(user.expires_at/1000):''}`}).send(body);
  };
  app.post('/api/login',async(req,res)=>{
   const {username,password}=req.body||{};
@@ -52,8 +56,8 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  app.get('/s/:token', (req,res)=>{
   const u=store.subscriptionUser(req.params.token.replace(/\.yaml$/,''));
   if(!u||u.role==='admin')return res.status(404).send('订阅不可用');
-  try{sendConfig(res,u);}
-  catch{return res.status(403).send('暂未分配可用配置');}
+  try{sendConfig(res,u,req.query.format);}
+  catch{return res.status(403).send('暂未分配可用配置，或客户端不支持该线路格式');}
  });
  app.use('/api',(req,res,next)=>{
   const u=store.authenticate(tokens(req));
@@ -77,7 +81,7 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
   try{if(!await passwordMatches(req.body?.currentPassword,req.user.password))return res.status(400).json({error:'当前密码不正确'});await store.setPassword(req.user.id,req.body?.password);guard.clearAccount('password',req.user.id);store.audit(req.user.username,'password-change',req.user.id);res.set('Set-Cookie',cookie('',0));res.json({ok:true});}finally{guard.release();}
  });
  app.post('/api/subscription/rotate',(req,res)=>{store.rotate(req.user.id);store.audit(req.user.username,'subscription-rotate',req.user.id);res.json({ok:true});});
- app.get('/api/config',(req,res)=>{try{sendConfig(res,req.user);}catch{res.status(403).json({error:'管理员尚未分配可用配置'});}});
+ app.get('/api/config',(req,res)=>{try{sendConfig(res,req.user,req.query.format);}catch{res.status(403).json({error:'管理员尚未分配可用配置，或客户端不支持该线路格式'});}});
  app.use('/api/admin',(req,res,next)=>{if(!admin||req.user.role!=='admin')return res.status(403).json({error:'此操作仅限私有管理入口'});next();});
  const checkGrants=grants=>Array.isArray(grants)&&grants.length<=200&&grants.every(id=>typeof id==='string'&&store.inventory().some(n=>n.id===id));
  app.get('/api/admin/settings',(_req,res)=>res.json(store.getSettings()));

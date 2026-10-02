@@ -6,7 +6,7 @@
 
 管理员集中维护线路、分配账号与权限；用户登录后领取自己的配置，查看用量和连接状态。Kenxu 使用 Node.js 与 SQLite，当前部署运行在 Jetson 上，通过 Cloudflare Tunnel 提供 HTTPS 访问，管理后台经私有 SSH 转发访问。
 
-当前代码版本 **1.1.1** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
+当前代码版本 **1.2.0** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
 
 ## 界面预览
 
@@ -20,7 +20,7 @@
 
 | 用户端 | 管理端 |
 | --- | --- |
-| 专属订阅、一键导入 Clash Verge、下载 YAML | 创建账号、授权线路、重置密码与停用账号 |
+| 专属订阅，Clash Verge／Android／Shadowrocket／Stash 导入，下载 YAML | 创建账号、授权线路、重置密码与停用账号 |
 | 今日／本月／累计用量，最近 30 天明细 | 按用户和逻辑线路查看上传、下载与历史记录 |
 | 用量趋势、线路占比、连接检测结果 | 全站图表、线路用量排行、服务器资源监测 |
 | 初始密码修改、订阅链接重置、使用指南 | 用户资料、展示额度、可选有效期、站点设置与操作日志 |
@@ -98,7 +98,9 @@ pnpm start
 - 直连、旧共享凭据或绕过受管入口的连接，无法归入某位用户。核心突然退出时，最后尚未上报的字节可能丢失。
 - 监测站中的主机网络数据与用户代理用量口径不同，界面分开展示。
 
-Clash Verge 中各策略组如何选择、规则模式有什么作用，见[用户使用指南](docs/user-guide.md)。该指南使用当前 Donson 部署的组名，其他部署可以自行替换。
+电脑、Android、iPhone／iPad 的安装、导入和连接步骤见[用户使用指南](docs/user-guide.md)。订阅页会按设备建议客户端，也可以手动选择。一键导入直接把个人订阅交给已安装的应用，不经过第三方转换网站。Clash Verge 与 Clash Meta 使用原始 YAML；Stash 使用适配的 iOS YAML；Shadowrocket 使用授权 VLESS 节点订阅，不包含 Clash 策略组和规则。
+
+该指南使用当前 Donson 部署的组名，其他部署可以自行替换。导入协议和输出格式已通过自动检查；应用能否在具体手机上打开与完整连接，仍受系统、浏览器和客户端版本影响，页面同时提供复制链接的手动步骤。
 
 ## 开发与验证
 
@@ -140,7 +142,7 @@ docs/         用户指南、部署维护、版本 review 与界面截图
 
 欢迎通过 [Issues](https://github.com/DonsonHH/kenxu/issues) 提交问题和改进建议。描述版本、复现步骤、预期与实际结果，截图及日志请先移除账号凭据。涉及安全问题时，请先联系维护者确认私下报告方式。
 
-提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md) 和[本次文档校对](docs/review-docs-20261002.md)。
+提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md) 和[移动端适配](docs/review-mobile-v1.2.0.md)。
 
 ## 致谢与许可
 
