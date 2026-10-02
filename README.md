@@ -1,48 +1,63 @@
+<p align="center"><img src="public/donson.svg" width="64" height="64" alt="Kenxu 标志"></p>
+
 # Kenxu
-Private subscription and traffic-accounting portal for trusted friends. Built and maintained by DonsonHH.
 
-Current version: **1.1.0**. See [appearance, authentication and performance review](docs/review-v1.1.0.md), or the [first stable release](docs/release-v1.0.0.md).
+面向小范围邀请用户的自托管订阅与流量管理门户。
 
-## Features
+管理员集中维护线路、分配账号与权限；用户登录后领取自己的配置，查看用量和连接状态。Kenxu 使用 Node.js 与 SQLite，当前部署运行在 Jetson 上，通过 Cloudflare Tunnel 提供 HTTPS 访问，管理后台经私有 SSH 转发访问。
 
-- Administrator-created accounts, per-user node grants, password reset and subscription rotation.
-- Xboard-inspired user/admin navigation: dashboard, subscriptions, node state, usage history, account settings and private management.
-- Per-user Xray traffic ledger, cumulative counter epochs, duplicate suppression and separate logical routes on a shared collector.
-- Optional Jetson WebSocket gateway for third-party nodes, without exposing provider credentials to friends.
-- Monthly usage displayed in Clash Verge using subscription response headers.
-- 100 GB display allowance only: **no traffic restriction, speed limit or automatic suspension**.
-- Subscription refresh recommendation: 720 minutes; website polling: 60 seconds. Traffic counter sampling remains 15 seconds; independent Jetson exit checks default to 15 minutes.
-- Distinct teal user/violet admin workspaces, with locally bundled charts for daily usage, route shares, rankings, connection results and infrastructure resources.
-- Separate loopback user/admin servers, scrypt password hashes, HttpOnly/SameSite sessions, CSRF/Origin checks and private/no-store subscription responses.
+当前代码版本 **1.1.1** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
 
-## Private management console
+## 界面预览
 
-The administrator port uses a distinct **Kenxu Control** identity. It supports editable ordinary-user usernames, display names, contact emails, administrator-only notes, labels, display allowance overrides and optional account expiry. Rename revokes existing user sessions/subscription links while retaining accounting identities. Expiry is checked at login, session/subscription use and node client synchronization; it is not a traffic quota.
+支持浅色、深色和跟随系统，适配桌面与手机。以下门户截图使用虚构测试账号和用量。
 
-User and node rows open detailed upload/download breakdowns and 30-day daily records. Settings persist validated site/admin titles, website and subscription intervals, default display GB, password floor, new-session duration, and monitoring source/cache policy. Existing accounts/default intervals are preserved unless explicitly edited.
+| 用户工作台 | 私有管理后台 |
+| --- | --- |
+| ![用户工作台深色模式](docs/images/v1.1-user-dark.png) | ![管理后台深色模式](docs/images/v1.1-admin-dark.png) |
 
-The user workspace shows only the account's own data and granted nodes. Node state comes from `kenxu-node-checks.service`: bounded authenticated HTTPS requests through each private source proxy from Jetson, not collector heartbeat. Administrators can set the check interval from 5 to 120 minutes. Source changes and stale samples are not shown as normal. The checker tests the source exit path; it does not certify a visitor's ISP or the public gateway edge. See [the user/connectivity review](docs/user-stage1-review.md).
+## 提供哪些功能
 
-Chart.js is bundled locally without a CDN. Changing the user's 7/30-day chart view does not send another request. Hidden panels are rendered on demand, unchanged snapshots reuse charts, and missing readings remain unknown instead of being invented as zero. Admin resource charts reuse the read-only monitor cache and are not exposed to ordinary users. See [the semifinal review](docs/charts-semifinal-review.md).
+| 用户端 | 管理端 |
+| --- | --- |
+| 专属订阅、一键导入 Clash Verge、下载 YAML | 创建账号、授权线路、重置密码与停用账号 |
+| 今日／本月／累计用量，最近 30 天明细 | 按用户和逻辑线路查看上传、下载与历史记录 |
+| 用量趋势、线路占比、连接检测结果 | 全站图表、线路用量排行、服务器资源监测 |
+| 初始密码修改、订阅链接重置、使用指南 | 用户资料、展示额度、可选有效期、站点设置与操作日志 |
 
-The monitoring adapter is read-only and uses an operator-provided HTTPS root plus the server-side `MONITOR_ALLOWED_ORIGINS` allowlist (comma-separated origins). It caches a bounded public bootstrap response, returns selected CPU/memory/disk/network/uptime fields only, and does not weaken monitoring-site frame protections. Infrastructure period totals are not per-user proxy usage.
+受管线路为每位用户分配独立的 Xray 凭据。即使两个逻辑出口共用一个采集器，也分别记录用量。第三方线路可通过 Jetson 网关转发并计量，用户收到的是网关凭据。
 
-Audit logs default to the latest 24 hours, with signed continuation pages into the retained 30-day window. Startup/hourly maintenance removes only audit entries older than 30 days, not the traffic ledger. The former 500-row cap is removed; already-deleted historical entries cannot be reconstructed.
+默认展示额度为 **100 GB／月**，用于显示本月使用比例，不实施流量限额或限速。管理员可以修改展示额度；账号停用和有效期属于独立的访问权限设置。项目面向邀请制共享，目前没有公开注册、支付、订单或自动售卖功能。
 
-On Windows, configure the ignored private `deploy/admin-ssh.config` from the example and install a dedicated, restricted forwarding key. `node deploy/launch-admin.mjs --check` validates configuration; `deploy/create-admin-shortcut.ps1` creates a desktop link. The launcher checks/starts a hidden local forwarding session and opens the private portal without storing server passwords or creating/overwriting the portal administrator. Web login remains required. Keep private keys outside this repository. See [the administration review](docs/admin-control-review.md).
+## 工作方式
 
-Layout and information architecture reference [cedar2025/Xboard](https://github.com/cedar2025/Xboard); see [study and compatibility notes](docs/xboard-study.md). This is an independently implemented Node/SQLite portal, not a deployment of Xboard's PHP/billing engine.
+门户负责账号、配置分发和用量记录。实际代理连接由 Xray 节点或中转网关处理，线路管理需要配套的采集器。
 
-## Local setup
+| 组件 | 职责 |
+| --- | --- |
+| 用户入口 `127.0.0.1:4450` | 登录、订阅、个人用量与节点状态；通过 Tunnel 发布 |
+| 管理入口 `127.0.0.1:4451` | 账号、授权、配置和运维；通过 SSH 转发访问 |
+| SQLite 私有数据目录 | 账号、会话、用量、设置、审计与认证限流记录 |
+| Xray 采集器 | 同步受管用户凭据，上报累计计数；门户处理重复报告和核心重启 |
+| Jetson 连接检测服务 | 定时通过源节点访问检测网站，保存时间、状态与响应耗时 |
+| 可选监测适配器 | 从允许的监测站读取 CPU、内存、磁盘、网络与运行时间 |
 
-Node.js >=22.13 and pnpm are required.
+默认网页查询周期是 60 秒，订阅更新建议为 720 分钟，连接检测周期为 15 分钟。采集器默认每 15 秒采样，具体上报还受队列和网络影响。
+
+## 本地运行
+
+需要 Git、**Node.js ≥ 22.13** 和 pnpm。前端资源由 esbuild 构建，服务端直接运行 JavaScript 模块；SQLite 使用 Node.js 内置模块，无需另装数据库服务。
 
 ```sh
+git clone https://github.com/DonsonHH/kenxu.git
+cd kenxu
 pnpm install --frozen-lockfile
 pnpm build
 ```
 
-Copy `.env.example` to a private `.env`, set the data directory outside the public assets, then initialize interactively:
+将 [`.env.example`](.env.example) 复制为 `.env`。Linux／macOS 可用 `cp .env.example .env`，PowerShell 可用 `Copy-Item .env.example .env`。默认配置适合本机验证，数据目录为 `./data`。
+
+在交互终端创建管理员，密码输入不会回显：
 
 ```sh
 pnpm admin create-admin owner
@@ -50,47 +65,85 @@ pnpm admin import /absolute/path/to/private-source.yaml
 pnpm start
 ```
 
-Administrator passwords are entered privately in an interactive terminal, never through command arguments or environment variables. Existing administrators are not overwritten. User endpoint defaults to loopback port 4450; private administration defaults to loopback port 4451. No real accounts, source configurations, node keys or collector tokens are included.
+将示例路径替换为自己的 YAML 文件路径。已有管理员时，初始化命令会拒绝覆盖其密码。
 
-## Production and metering
+服务启动后：
 
-Set an exact HTTPS `PUBLIC_ORIGIN`, the loopback `ADMIN_ORIGIN`, and an absolute private `DATA_DIR`. The service refuses implicit production defaults. Both listeners bind to `127.0.0.1`; publish **only the user port** through the HTTP Tunnel. Use a private SSH port forward for administration. Example service units are in `deploy/`; adapt user/path/origin values for your host.
+1. 打开 [本机管理入口](http://127.0.0.1:4451)，用刚创建的管理员登录。
+2. 创建普通用户并分配线路。
+3. 用户打开 [本机用户入口](http://127.0.0.1:4450)，先修改初始密码，再领取订阅。
 
-Meter nodes require private registration and a compatible local collector. The optional reusable collector/playbook lives in [DonsonHH/my-ansible-playbooks](https://github.com/DonsonHH/my-ansible-playbooks). Register each physical core once; attach forwarded logical routes to the same physical agent. The UK SOCKS relay is TCP-only. Third-party gateways need private upstream configuration, a loopback API, and a fixed-path authenticated VLESS/WebSocket inlet; adding a node to a YAML file alone does not install these components. To enable cached source exit checks, install the example `deploy/kenxu-node-checks.service` with private `DATA_DIR`, Xray and curl available on Jetson.
+这几步可以运行门户和配置分发。要获得逐用户流量统计，还需部署采集器并注册受管节点，详见[部署与维护](docs/operations.md)。仅导入 YAML 不会自动完成服务器侧计量接入。
 
-Only managed, authorized routes get independent credentials. Old shared credentials, DIRECT and bypassed routes cannot be attributed to a friend. Source file replacement does not update a third-party gateway's upstream automatically. Collector heartbeats are not end-to-end node health tests. Short polling does not guarantee lossless accounting after an abrupt core crash.
+## 配置
 
-## Subscription display
+| 变量 | 开发默认值 | 说明 |
+| --- | --- | --- |
+| `NODE_ENV` | `development` | 正式部署设为 `production` |
+| `DATA_DIR` | `./data` | 正式部署使用公有资源目录之外的绝对路径 |
+| `PUBLIC_ORIGIN` | `http://127.0.0.1:4450` | 用户入口的完整 origin，正式部署使用准确的 HTTPS 域名 |
+| `ADMIN_ORIGIN` | `http://127.0.0.1:4451` | 浏览器实际访问的私有管理 origin |
+| `PORT` / `ADMIN_PORT` | `4450` / `4451` | 两个服务均绑定回环地址 |
+| `MONITOR_ALLOWED_ORIGINS` | 未配置 | 可选监测源的 HTTPS origin 允许列表，逗号分隔 |
 
-Kenxu returns monthly `upload` and `download` plus `total=107374182400` in `subscription-userinfo`. This is the client's 100 GB display reference, not an enforced quota. The Beijing natural-month boundary resets the **monthly view**, retaining cumulative history. No expiry is invented.
+站点名称、密码最短长度、会话时长、展示额度和查询周期等选项，可在管理后台的“系统设置”中修改。监测源同时需要填写后台网址并加入服务器允许列表。
 
-`profile-update-interval: 12` means 720 minutes. Existing Clash Verge profiles with a manually saved 360-minute interval need that option changed to 720. Client card usage updates when the remote subscription is refreshed, not every time the webpage refreshes. A local YAML file does not fetch subscription headers.
+正式部署使用现有 Cloudflare Tunnel，将公开域名指向用户端口；管理端保留私有访问。仓库的 [`deploy/`](deploy/) 提供针对当前 Jetson 部署的 systemd 示例，使用前应替换账号、路径、域名和二进制位置。配置步骤、Windows 桌面入口及备份方法见[运维文档](docs/operations.md)。
 
-## Verification
+## 用量与连接状态
+
+- 用量按受管入口的上传与下载合计，月视图采用北京时间自然月；每月重算月视图，累计记录保留。
+- Clash Verge 通过订阅响应头读取本月用量；它的卡片通常在更新订阅时才刷新。导入本地 YAML 文件不会自动获取这些响应头。
+- 网页的“正常”表示 Jetson 最近一次通过源节点成功访问了检测网站。个人网络和公开中转入口可能有不同结果，客户端测试仍有参考价值。
+- 直连、旧共享凭据或绕过受管入口的连接，无法归入某位用户。核心突然退出时，最后尚未上报的字节可能丢失。
+- 监测站中的主机网络数据与用户代理用量口径不同，界面分开展示。
+
+Clash Verge 中各策略组如何选择、规则模式有什么作用，见[用户使用指南](docs/user-guide.md)。该指南使用当前 Donson 部署的组名，其他部署可以自行替换。
+
+## 开发与验证
 
 ```sh
+pnpm build
 pnpm test
 pnpm exec playwright install chromium
 pnpm test:browser
 pnpm audit --prod
 ```
 
-Browser checks use isolated fictional accounts and temporary databases, then clean them up. On hosts with an installed browser, `PLAYWRIGHT_CHANNEL=msedge` or `chrome` is also supported. Screenshots/results go to ignored `test-output/`. The header tests cover per-user isolation, Beijing month rollover, HEAD responses and continued availability after crossing 100 GB.
+浏览器检查使用临时数据库和虚构账号，截图写入被 Git 忽略的 `test-output/`。已有 Edge 或 Chrome 时，可将 `PLAYWRIGHT_CHANNEL` 设为 `msedge` 或 `chrome`。例如 PowerShell：
 
-See the [review and captured flows](docs/review-20261001.md) for the source-informed design and validation boundaries. The published images show fictional test data only.
+```powershell
+$env:PLAYWRIGHT_CHANNEL = 'msedge'
+pnpm test:browser
+```
 
-## Security and backups
+刷新行为的复现脚本为 `node test/refresh-performance.mjs`。源码修改后运行 `pnpm build`，再提交相应构建资源。当前检查涵盖账号与权限隔离、认证限流、订阅元数据、月边界、流量去重、删除账号后的旧计数、主题与移动端交互。
 
-Do not commit `.env`, private YAML, SQLite files, subscription keys, collector registrations, screenshots containing real links or SSH inventories. The repository intentionally excludes machine-specific access helpers and private delivery records.
+```text
+src/          服务端、数据存储、计量、连接检测与前端构建入口
+public/       页面、可编辑样式、浏览器模块与构建产物
+scripts/      构建和连接检测脚本
+deploy/       服务单元与私有管理入口示例
+test/         后端、浏览器和刷新性能检查
+docs/         用户指南、部署维护、版本 review 与界面截图
+```
 
-Subscription URLs are bearer credentials. Never publicly share them or enable proxy access logs containing them. Do not use Cloudflare cache-everything, browser challenges or interactive Access login on subscription/collector routes; clients need non-interactive access. External script injection is blocked by the CSP, but is not a replacement for protecting the origin.
+## 安全与维护
 
-Stop the portal before making a filesystem copy of its entire private data directory (including WAL/key files). Preserve backup permissions. Stage releases and switch the release link atomically, retaining the previous version. Do not copy just a live SQLite main file over a WAL database. Keep the ledger and collector queue when rolling back.
+用户端与管理端校验不同角色，使用 HttpOnly／SameSite 会话、Origin 与 CSRF 校验。登录限流持久化到数据库，包含账号、来源及总量限制，并约束密码计算并发。当前版本没有 TOTP／WebAuthn。
 
-When permanently removing a disabled ordinary account, record its exact collector identities with `store.meter.retireUserCredentials(id)` before deleting credentials or account rows, in the same transaction. Xray and queued reports can retain counters after client removal. Retirement markers let those reports drain without recreating removed usage; all other unknown or wrong-agent identities remain rejected. Back up first and retain markers with the ledger.
+订阅链接是访问凭据。不要将密码、链接、私有 YAML、SQLite 数据、节点密钥或真实用户截图提交到仓库，也不要对订阅／采集接口启用共享缓存或交互式浏览器验证。静态资源使用校验缓存，敏感响应保留 `no-store`。
 
-This is a small invitation-only service, not a fully audited public commercial system. Authentication limits persist in SQLite across restarts: per-realm/account/source/global fixed windows and a shared password-work concurrency budget. See the 1.1.0 review for exact thresholds and the trusted Cloudflare-header deployment assumption. Disabled managed users are removed on successful collector synchronization; existing long-lived connections can continue until closed. Legacy shared credentials remain outside that revocation mechanism.
+升级前备份完整私有数据目录，保留可回退的发布目录。复制数据库前需要停止门户和连接检测等写入者；详细方法与账号删除注意事项见[部署与维护](docs/operations.md)。
 
-## License
+## 反馈与贡献
 
-MIT; see [LICENSE](LICENSE). Bundled frontend library notices are in [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt).
+欢迎通过 [Issues](https://github.com/DonsonHH/kenxu/issues) 提交问题和改进建议。描述版本、复现步骤、预期与实际结果，截图及日志请先移除账号凭据。涉及安全问题时，请先联系维护者确认私下报告方式。
+
+提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md) 和[本次文档校对](docs/review-docs-20261002.md)。
+
+## 致谢与许可
+
+界面信息架构参考 [cedar2025/Xboard](https://github.com/cedar2025/Xboard)，门户使用独立的 Node.js／SQLite 实现。节点部署与采集器相关工作位于 [DonsonHH/my-ansible-playbooks](https://github.com/DonsonHH/my-ansible-playbooks)。项目使用 React、Sonner、Lucide、Chart.js、Express、yaml 和 esbuild。
+
+由 [DonsonHH](https://github.com/DonsonHH) 维护，采用 [MIT License](LICENSE)。第三方库许可见 [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt)。
