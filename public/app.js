@@ -1,5 +1,6 @@
 import {UI_REFRESH_SECONDS,DISPLAY_ALLOWANCE_BYTES} from '/policy.js';
 import {createAdminUI} from '/admin.js';
+import {pointerMotion,revealPanel} from '/motion.js';
 const $=selector=>document.querySelector(selector);
 let me=null,adminState=null,adminUsage=null,timer=null,currentPanel='dashboard',usageTask=null,lastUsageAt=0;
 let realm={adminInterface:false,policy:{uiRefreshSeconds:UI_REFRESH_SECONDS}};
@@ -17,7 +18,7 @@ function bytes(value){if(value<1024)return value+' B';const units=['KB','MB','GB
 function node(tag,text,className){const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;}
 const icon=name=>window.portalIcon?.(name)||node('span');
 const adminUI=createAdminUI({api,node,bytes,time,tell,reload:load,getState:()=>adminState,getPanel:()=>currentPanel});
-function applyRealm(info){realm=info;document.body.classList.toggle('admin-shell',info.adminInterface);for(const span of document.querySelectorAll('.brand>span'))span.textContent=info.title;document.title=info.adminInterface?info.title+' · 私有管理后台':info.title;
+function applyRealm(info){realm=info;document.body.classList.toggle('admin-shell',info.adminInterface);for(const span of document.querySelectorAll('.brand>span'))span.textContent=info.title;document.title=info.adminInterface?info.title+' · 私有管理后台':info.title;$('#release-version').textContent=info.version?'v'+info.version:'';
  document.body.classList.toggle('user-shell',!info.adminInterface);
  for(const f of ['#password-form','#user-form','#reset-form'])$(f).elements.password.minLength=info.policy.minPasswordLength;
  $('.password-card>p.muted').textContent='至少 '+info.policy.minPasswordLength+' 个字符。保存后重新登录，旧订阅链接失效。';
@@ -25,9 +26,10 @@ function applyRealm(info){realm=info;document.body.classList.toggle('admin-shell
  const recommendation=document.querySelector('#delivery .notice.subtle');if(recommendation)recommendation.textContent='订阅建议每 '+info.policy.subscriptionMinutes+' 分钟更新。已有配置若手动保存了其他间隔，请在客户端「编辑信息」中修改。';
  if(info.adminInterface){$('.intro h1').textContent=info.title;$('.intro>p').textContent='账号、节点、用量与系统运行。私有入口，仅限管理员。';$('.login-card h2').textContent='管理员登录';$('#login-form button').textContent='登录管理后台';$('#invite-badge').textContent='私有管理入口';}
 }
+let menuTransition;
 function mobileMenu(open,focus=true){
  if(open&&!matchMedia('(max-width:850px)').matches)return;
- document.body.classList.toggle('menu-animating',focus);if(focus)setTimeout(()=>document.body.classList.remove('menu-animating'),160);
+ clearTimeout(menuTransition);const animate=focus&&pointerMotion();document.body.classList.toggle('menu-animating',animate);if(animate)menuTransition=setTimeout(()=>document.body.classList.remove('menu-animating'),240);
  document.body.classList.toggle('nav-open',open);$('#menu-backdrop').hidden=!open;$('#menu-toggle').setAttribute('aria-expanded',String(open));
  $('#content').inert=open;document.querySelector('.topbar').inert=open;
  if(open){$('#sidebar').setAttribute('role','dialog');$('#sidebar').setAttribute('aria-modal','true');$('#section-nav button').focus();}
@@ -35,7 +37,7 @@ function mobileMenu(open,focus=true){
 }
 function selectPanel(id,{focus=false}={}){
  if(!me||me.mustChange)return;const entry=routes[me.role].find(r=>r[1]===id);if(!entry)return;
- currentPanel=id;show(me.role==='admin'?'admin-view':'user-view');
+ const changed=currentPanel!==id;currentPanel=id;show(me.role==='admin'?'admin-view':'user-view');
  for(const panel of document.querySelectorAll('#user-view [data-panel],#admin-view [data-panel]'))panel.hidden=panel.dataset.panel!==id;
  for(const b of $('#section-nav').querySelectorAll('button'))b.setAttribute('aria-current',b.dataset.panel===id?'page':'false');
  $('#page-heading').textContent=entry[2];document.title=entry[2]+' · '+realm.title+(realm.adminInterface?' · Admin':'');
@@ -43,6 +45,7 @@ function selectPanel(id,{focus=false}={}){
  mobileMenu(false,false);if(focus)$('#page-heading').focus();
  if(me.role==='admin')adminUI.onPanel(id);
  window.portalCharts?.render();
+ if(focus&&changed){if(me.role==='user')revealPanel($('#user-view [data-panel="'+id+'"]'));window.scrollTo({top:0,behavior:'instant'});}
 }
 function navigation(){
  let group;const entries=routes[me.role],parts=[];
@@ -56,6 +59,7 @@ function resetUsage(){
  for(const id of ['node-list','usage-routes','users-list','admin-usage-list','admin-nodes','audit-list','daily-list'])$('#'+id).replaceChildren();
  adminUsage=null;lastUsageAt=0;
  lastHealth=null;for(const id of ['nodes-normal','nodes-failed'])$('#'+id).textContent='—';
+ $('#dashboard-nodes').textContent='—';$('#dashboard-nodes-note').textContent='查看节点状态';$('#plan-name').textContent='好友共享';
  window.portalCharts?.clear();
  adminUI.reset();
  for(const id of ['welcome-name','account-name','identity','node-count'])$('#'+id).textContent='';
@@ -91,7 +95,7 @@ function renderUsage(data){
   $('#collectors-stat').textContent=new Set(data.nodes.map(n=>n.agent_id)).size+' 个采集器';
   $('#admin-nodes').replaceChildren(...adminState.nodes.map(n=>{const m=data.nodes.find(m=>m.proxy_id===n.id),card=routeCard({...n,kind:m?.kind},m,{admin:true});if(m)adminUI.addNodeAmounts(card,m,data);return card;}));adminUI.onUsage();
  }else{
-  $('#nodes-normal').textContent=lastHealth?.nodes.filter(n=>n.status==='normal').length??'—';$('#nodes-failed').textContent=lastHealth?.nodes.filter(n=>n.status==='failed').length??'—';$('#nodes-check-description').textContent='由 Jetson 验证连接，每 '+(lastHealth?.checkIntervalMinutes||15)+' 分钟检测一次';
+  const normal=lastHealth?.nodes.filter(n=>n.status==='normal').length;$('#nodes-normal').textContent=normal??'—';$('#nodes-failed').textContent=lastHealth?.nodes.filter(n=>n.status==='failed').length??'—';$('#nodes-check-description').textContent='由 Jetson 验证连接，每 '+(lastHealth?.checkIntervalMinutes||15)+' 分钟检测一次';$('#dashboard-nodes').textContent=normal===undefined?'—':normal+' / '+me.nodes.length;$('#dashboard-nodes-note').textContent=normal===undefined?'等待检测结果':'正常 / 已分配';
   const connected=data.routes.length>0,used=data.month.up+data.month.down,quota=data.allowance?.bytes||DISPLAY_ALLOWANCE_BYTES;
   for(const [id,value]of [['usage-today',data.today],['usage-month',data.month],['usage-total',data.total]])$('#'+id).textContent=connected?total(value):'—';
   $('#plan-used').textContent=connected?bytes(used):'—';$('#plan-percent').textContent=connected?(used/quota*100).toFixed(1)+'%':'未接入计量';$('#plan-progress').value=connected?Math.min(100,used/quota*100):0;
@@ -116,7 +120,7 @@ async function refreshUsage({force=false,propagate=false}={}){
  task.promise=(async()=>{try{
   const [data,health]=await Promise.all([api(identity.role==='admin'?'/api/admin/usage':'/api/usage'),api(identity.role==='admin'?'/api/admin/nodes/status':'/api/nodes/status').catch(()=>null)]);
   if(me!==identity)return;lastHealth=health;renderUsage(data);lastUsageAt=Date.now();
- }catch(err){if(me===identity){$(identity.role==='admin'?'#admin-usage-sync':'#usage-sync').textContent='更新失败 · 数据可能过期';$('#page-sync').textContent='等待重新连接';}throw err;}
+ }catch(err){if(me===identity){if(err.status===401){me=null;await load();tell('登录已过期，请重新登录。','info');}else{$(identity.role==='admin'?'#admin-usage-sync':'#usage-sync').textContent='更新失败 · 数据可能过期';$('#page-sync').textContent='等待重新连接';}}throw err;}
  finally{if(usageTask===task)usageTask=null;}})();usageTask=task;try{return await task.promise;}catch(err){if(propagate)throw err;}
 }
 async function api(url,{method='GET',body}={}){

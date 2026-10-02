@@ -1,6 +1,8 @@
 # Kenxu
 Private subscription and traffic-accounting portal for trusted friends. Built and maintained by DonsonHH.
 
+Current stable version: **1.0.0**. See [release notes and final review](docs/release-v1.0.0.md).
+
 ## Features
 
 - Administrator-created accounts, per-user node grants, password reset and subscription rotation.
@@ -84,6 +86,8 @@ Do not commit `.env`, private YAML, SQLite files, subscription keys, collector r
 Subscription URLs are bearer credentials. Never publicly share them or enable proxy access logs containing them. Do not use Cloudflare cache-everything, browser challenges or interactive Access login on subscription/collector routes; clients need non-interactive access. External script injection is blocked by the CSP, but is not a replacement for protecting the origin.
 
 Stop the portal before making a filesystem copy of its entire private data directory (including WAL/key files). Preserve backup permissions. Stage releases and switch the release link atomically, retaining the previous version. Do not copy just a live SQLite main file over a WAL database. Keep the ledger and collector queue when rolling back.
+
+When permanently removing a disabled ordinary account, record its exact collector identities with `store.meter.retireUserCredentials(id)` before deleting credentials or account rows, in the same transaction. Xray and queued reports can retain counters after client removal. Retirement markers let those reports drain without recreating removed usage; all other unknown or wrong-agent identities remain rejected. Back up first and retain markers with the ledger.
 
 This is a small invitation-only service, not a fully audited public commercial system. Login rate limits are in memory and reset with the process. Disabled managed users are removed on successful collector synchronization; existing long-lived connections can continue until closed. Legacy shared credentials remain outside that revocation mechanism.
 

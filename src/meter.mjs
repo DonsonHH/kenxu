@@ -12,6 +12,7 @@ export function createMeter(store){
  CREATE TABLE IF NOT EXISTS meter_epochs(node_id TEXT NOT NULL,epoch TEXT NOT NULL,last_seq INTEGER NOT NULL,last_sample INTEGER NOT NULL,PRIMARY KEY(node_id,epoch));
  CREATE TABLE IF NOT EXISTS meter_reports(node_id TEXT NOT NULL,epoch TEXT NOT NULL,seq INTEGER NOT NULL,hash TEXT NOT NULL,PRIMARY KEY(node_id,epoch,seq));
  CREATE TABLE IF NOT EXISTS meter_counters(node_id TEXT NOT NULL,epoch TEXT NOT NULL,email TEXT NOT NULL,up INTEGER NOT NULL,down INTEGER NOT NULL,PRIMARY KEY(node_id,epoch,email));
+ CREATE TABLE IF NOT EXISTS meter_retired_identities(agent_id TEXT NOT NULL,email TEXT NOT NULL,retired_at INTEGER NOT NULL,PRIMARY KEY(agent_id,email));
  CREATE TABLE IF NOT EXISTS usage_events(id INTEGER PRIMARY KEY,node_id TEXT NOT NULL,user_id TEXT NOT NULL,at INTEGER NOT NULL,up INTEGER NOT NULL,down INTEGER NOT NULL,counter_reset INTEGER NOT NULL DEFAULT 0);
  CREATE INDEX IF NOT EXISTS usage_user_time ON usage_events(user_id,at);
  CREATE INDEX IF NOT EXISTS usage_user_node ON usage_events(user_id,node_id,at);
@@ -60,7 +61,10 @@ export function createMeter(store){
    if(epoch&&(body.seq<=epoch.last_seq||body.at<epoch.last_sample))throw Error('Out-of-order meter report');
    for(const c of body.counters){
     const owner=db.prepare('SELECT c.user_id,c.node_id FROM meter_credentials c JOIN meter_nodes n ON n.id=c.node_id WHERE n.agent_id=? AND c.email=?').get(node.id,c.email);
-    if(!owner)throw Error('Unknown meter identity');
+    // Xray may retain counters after client removal; queued reports may also
+    // predate deletion. Only exact operator-retired identities from this agent
+    // are ignored. Other unknown identities still reject the entire batch.
+    if(!owner){if(db.prepare('SELECT 1 FROM meter_retired_identities WHERE agent_id=? AND email=?').get(node.id,c.email))continue;throw Error('Unknown meter identity');}
     const previous=db.prepare('SELECT up,down FROM meter_counters WHERE node_id=? AND epoch=? AND email=?').get(node.id,body.epoch,c.email);
     const up=previous?c.up>=previous.up?c.up-previous.up:c.up:c.up;
     const down=previous?c.down>=previous.down?c.down-previous.down:c.down:c.down;
@@ -99,6 +103,7 @@ export function createMeter(store){
  }
  return {
   desired,overrideSource,report,usage,totals,
+  retireUserCredentials(userId){const user=store.getUser(userId);if(!user||user.role!=='user'||user.enabled)throw Error('Only disabled ordinary-user credentials may be retired');return db.prepare('INSERT OR IGNORE INTO meter_retired_identities(agent_id,email,retired_at) SELECT n.agent_id,c.email,? FROM meter_credentials c JOIN meter_nodes n ON n.id=c.node_id WHERE c.user_id=?').run(Date.now(),userId).changes;},
   authenticate(token){if(typeof token!=='string'||token.length<30||token.length>128)return null;return db.prepare('SELECT * FROM meter_nodes WHERE token_hash=? AND enabled=1 AND agent_id=id').get(digest(token))||null;},
   register(proxyId,name,{agentId,outboundTag,clientTemplate}={}){if(!store.inventory().some(n=>n.id===proxyId&&n.type==='vless'))throw Error('节点不存在或不是 VLESS');if(agentId&&nodeById(agentId)?.agent_id!==agentId)throw Error('Invalid physical agent');if(outboundTag&&!/^[a-zA-Z0-9_-]{1,64}$/.test(outboundTag))throw Error('Invalid outbound');const id=randomUUID(),token=randomBytes(32).toString('base64url');db.prepare('INSERT INTO meter_nodes(id,proxy_id,name,token_hash,created,agent_id,outbound_tag,client_template) VALUES(?,?,?,?,?,?,?,?)').run(id,proxyId,name,digest(token),Date.now(),agentId||id,outboundTag||null,clientTemplate?JSON.stringify(clientTemplate):null);return {id,token};},
   nodes:()=>db.prepare('SELECT id,proxy_id,name,enabled,last_seen,created,agent_id,outbound_tag,client_template FROM meter_nodes').all().map(n=>({...n,client_template:undefined,kind:n.client_template?'relay':n.outbound_tag?'forwarded':'direct'})),

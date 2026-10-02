@@ -2,6 +2,7 @@ import express from 'express';
 import {fileURLToPath} from 'node:url';
 import {passwordMatches,passwordHash} from './store.mjs';
 import {createMonitorReader} from './monitor.mjs';
+import {VERSION} from './version.mjs';
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
 const badPassword=await passwordHash('dummy-password-not-an-account');
 export function createApp({store,origin,subscriptionOrigin=origin,admin=false,monitorReader}){
@@ -23,8 +24,8 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
   next();
  });
  app.use(express.json({limit:'600kb',strict:true}));
- app.get('/healthz',(_req,res)=>res.json({ok:true,interface:admin?'admin':'user'}));
- app.get('/api/interface',(_req,res)=>res.json({adminInterface:admin,title:admin?store.getSettings().adminTitle:store.getSettings().siteName,policy:store.publicPolicy()}));
+ app.get('/healthz',(_req,res)=>res.json({ok:true,interface:admin?'admin':'user',version:VERSION}));
+ app.get('/api/interface',(_req,res)=>res.json({adminInterface:admin,title:admin?store.getSettings().adminTitle:store.getSettings().siteName,version:VERSION,policy:store.publicPolicy()}));
  const sendConfig=(res,user)=>{
   const configuration=store.config(user),month=store.meter.totals(user.id).month;
   res.set({'Content-Type':'text/yaml; charset=utf-8','Content-Disposition':'attachment; filename="Kenxu.yaml"',
