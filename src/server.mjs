@@ -8,7 +8,7 @@ const userPort=Number(process.env.PORT||4450),adminPort=Number(process.env.ADMIN
 const origin=process.env.PUBLIC_ORIGIN||`http://127.0.0.1:${userPort}`;
 const adminOrigin=process.env.ADMIN_ORIGIN||`http://127.0.0.1:${adminPort}`;
 const servers=[
- createApp({store,origin}).listen(userPort,'127.0.0.1',()=>console.log(`User portal: 127.0.0.1:${userPort}`)),
+ createApp({store,origin,trustCloudflare:new URL(origin).protocol==='https:'}).listen(userPort,'127.0.0.1',()=>console.log(`User portal: 127.0.0.1:${userPort}`)),
  createApp({store,origin:adminOrigin,subscriptionOrigin:origin,admin:true}).listen(adminPort,'127.0.0.1',()=>console.log(`Private administration: 127.0.0.1:${adminPort}`)),
 ];
 const closeRelay=attachRelay(servers[0]);

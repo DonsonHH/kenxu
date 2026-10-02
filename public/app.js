@@ -5,6 +5,8 @@ const $=selector=>document.querySelector(selector);
 let me=null,adminState=null,adminUsage=null,timer=null,currentPanel='dashboard',usageTask=null,lastUsageAt=0;
 let realm={adminInterface:false,policy:{uiRefreshSeconds:UI_REFRESH_SECONDS}};
 let lastHealth=null;
+const rendered=new Map();
+function changed(key,value){const next=JSON.stringify(value);if(rendered.get(key)===next)return false;rendered.set(key,next);return true;}
 const routes={
  user:[['工作台','dashboard','仪表盘','dashboard'],['工作台','subscription','我的订阅','subscription'],['工作台','connections','节点状态','nodes'],['工作台','usage','流量明细','traffic'],['使用与账户','knowledge','使用文档','knowledge'],['使用与账户','account','个人中心','account']],
  admin:[['概览','dashboard','仪表盘','dashboard'],['用户与流量','accounts','用户管理','users'],['用户与流量','traffic','流量统计','traffic'],['连接管理','nodes','节点管理','nodes'],['系统','settings','系统设置','settings'],['系统','audit','操作日志','audit']]
@@ -54,6 +56,7 @@ function navigation(){
  const requested=location.hash.slice(1);selectPanel(entries.some(e=>e[1]===requested)?requested:entries.some(e=>e[1]===currentPanel)?currentPanel:'dashboard');
 }
 function resetUsage(){
+ rendered.clear();
  for(const id of ['usage-today','usage-month','usage-total','plan-used','plan-percent','period-label','reset-date','admin-month-up','admin-month-down','admin-today','admin-total','fresh-routes'])$('#'+id).textContent='—';
  $('#plan-progress').value=0;$('#page-sync').textContent='';$('#usage-sync').textContent='读取中';$('#admin-usage-sync').textContent='读取中';
  for(const id of ['node-list','usage-routes','users-list','admin-usage-list','admin-nodes','audit-list','daily-list'])$('#'+id).replaceChildren();
@@ -64,6 +67,7 @@ function resetUsage(){
  adminUI.reset();
  for(const id of ['welcome-name','account-name','identity','node-count'])$('#'+id).textContent='';
 }
+function dropSession(){clearInterval(timer);me=null;adminState=null;resetUsage();$('#subscription').value='';$('#import-clash').removeAttribute('href');$('#identity').hidden=true;$('#logout').hidden=true;mobileMenu(false,false);show('login-view');}
 function routeCard(n,r,{admin=false}={}){
  const card=node(admin?'div':'li',undefined,'route-card'),top=node('div',undefined,'route-top'),info=node('div');
  info.append(node('strong',n.name,'route-title'),node('small',kindName(n.kind||r?.kind),'route-kind'));
@@ -74,6 +78,7 @@ function routeCard(n,r,{admin=false}={}){
  card.append(node('p',(admin?'最近采样 · ':'Jetson 检测 · ')+time(admin?r?.last_seen:h?.checkedAt),'fine'));return card;
 }
 function renderDaily(rows){
+ if(!changed('daily',rows))return;
  $('#daily-list').replaceChildren(...[...rows].reverse().map(r=>{const tr=node('tr');for(const value of [r.date,bytes(r.up),bytes(r.down),total(r)])tr.append(node('td',value));return tr;}));
 }
 function renderTraffic(){
@@ -105,10 +110,9 @@ function renderUsage(data){
   $('#allowance-note').textContent=used>quota?'已超过展示额度，仍可继续使用。':'额度仅供参考，不限制使用。';
   $('#account-allowance').textContent=bytes(quota)+' / 月';$('#account-subscription-interval').textContent=realm.policy.subscriptionMinutes+' 分钟';
   $('#usage-sync').textContent=!connected?'尚未接入计量':data.routes.some(r=>r.assigned&&r.online&&r.synced)?'采集正常 · 每 '+data.uiRefreshIntervalSeconds+' 秒刷新':'等待同步 · 保留历史';
-  $('#node-list').replaceChildren(...me.nodes.map(n=>routeCard(n,data.routes.find(r=>r.id===n.id))));
-  if(!me.nodes.length)$('#node-list').append(node('li','尚未分配线路，请联系 Donson。','notice'));
+  if(changed('nodes',[me.nodes,lastHealth?.nodes,data.routes.map(r=>({id:r.id,month:r.month,kind:r.kind}))])){$('#node-list').replaceChildren(...me.nodes.map(n=>routeCard(n,data.routes.find(r=>r.id===n.id))));if(!me.nodes.length)$('#node-list').append(node('li','尚未分配线路，请联系 Donson。','notice'));}
   const history=data.routes.filter(r=>!r.assigned);$('#history-section').hidden=!history.length;
-  $('#usage-routes').replaceChildren(...history.map(r=>{const item=node('li'),details=node('span');details.append(node('strong',r.name),node('small','当前未授权'));item.append(details,node('span',total(r)));return item;}));
+  if(changed('history',history.map(r=>({name:r.name,up:r.up,down:r.down}))))$('#usage-routes').replaceChildren(...history.map(r=>{const item=node('li'),details=node('span');details.append(node('strong',r.name),node('small','当前未授权'));item.append(details,node('span',total(r)));return item;}));
   renderDaily(data.daily);
  }
 }
@@ -120,13 +124,13 @@ async function refreshUsage({force=false,propagate=false}={}){
  task.promise=(async()=>{try{
   const [data,health]=await Promise.all([api(identity.role==='admin'?'/api/admin/usage':'/api/usage'),api(identity.role==='admin'?'/api/admin/nodes/status':'/api/nodes/status').catch(()=>null)]);
   if(me!==identity)return;lastHealth=health;renderUsage(data);lastUsageAt=Date.now();
- }catch(err){if(me===identity){if(err.status===401){me=null;await load();tell('登录已过期，请重新登录。','info');}else{$(identity.role==='admin'?'#admin-usage-sync':'#usage-sync').textContent='更新失败 · 数据可能过期';$('#page-sync').textContent='等待重新连接';}}throw err;}
+ }catch(err){if(me===identity){if(err.status===401){dropSession();tell('登录已过期，请重新登录。','info');}else{$(identity.role==='admin'?'#admin-usage-sync':'#usage-sync').textContent='更新失败 · 数据可能过期';$('#page-sync').textContent='等待重新连接';}}throw err;}
  finally{if(usageTask===task)usageTask=null;}})();usageTask=task;try{return await task.promise;}catch(err){if(propagate)throw err;}
 }
 async function api(url,{method='GET',body}={}){
  let response;try{response=await fetch(url,{method,headers:{...(body?{'Content-Type':'application/json'}:{}),...(me?.csrf?{'X-CSRF-Token':me.csrf}:{})},body:body?JSON.stringify(body):undefined,credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000)});}catch(err){throw Error(err.name==='TimeoutError'?'请求超时，请稍后重试。':'网络暂不可用，请稍后重试。');}
  let data;try{data=await response.json();}catch{throw Error('无法读取服务器响应，请稍后重试。');}
- if(!response.ok){const failure=Error(data.error||'请求失败');failure.status=response.status;throw failure;}return data;
+ if(!response.ok){const failure=Error(data.error||'请求失败');failure.status=response.status;failure.retryAfter=Number(data.retryAfter||response.headers.get('Retry-After'))||0;throw failure;}return data;
 }
 function show(view){
  for(const id of ['login-view','user-view','admin-view','password-view'])$('#'+id).hidden=id!==view;
@@ -134,9 +138,8 @@ function show(view){
  for(const id of ['page-heading','menu-toggle','refresh','header-password'])$('#'+id).hidden=!authenticated;
 }
 async function load(){
- clearInterval(timer);let next;
- applyRealm(await api('/api/interface'));
- try{next=await api('/api/me');}catch(err){if(err.status!==401)throw err;next=null;}
+ clearInterval(timer);
+ const [info,next]=await Promise.all([api('/api/interface'),api('/api/me').catch(err=>{if(err.status!==401)throw err;return null;})]);applyRealm(info);
  me=next;resetUsage();$('#identity').hidden=!me;$('#logout').hidden=!me;$('#invite-badge').hidden=!!me;
  if(!me){currentPanel='dashboard';adminState=null;$('#subscription').value='';$('#import-clash').removeAttribute('href');mobileMenu(false,false);history.replaceState(null,'',location.pathname);show('login-view');return;}
  $('#identity').textContent=me.username;
@@ -172,11 +175,11 @@ function editUser(u){
 }
 function handleForm(selector,work,errorTarget='#status'){
  const form=$(selector);form.addEventListener('submit',async e=>{e.preventDefault();const button=form.querySelector('button[type="submit"],button.primary,button.secondary');if(button.disabled)return;
- const label=button.textContent;button.disabled=true;button.textContent='处理中…';$(errorTarget).textContent='';
- try{await work(form);}catch(err){$(errorTarget).textContent=err.message;if(!form.closest('dialog[open]'))error(err.message);}finally{button.disabled=false;button.textContent=label;}});
+ const label=button.textContent;let cooldown=0;button.disabled=true;button.textContent='处理中…';$(errorTarget).textContent='';
+ try{await work(form);}catch(err){cooldown=err.status===429?Math.min(900,Math.max(1,err.retryAfter||3)):0;$(errorTarget).textContent=err.message;if(!form.closest('dialog[open]'))error(err.message);}finally{button.disabled=false;button.textContent=label;if(cooldown){const deadline=Date.now()+cooldown*1000;button.disabled=true;const tick=()=>{const remaining=Math.max(0,Math.ceil((deadline-Date.now())/1000));button.textContent=remaining?'请等待 '+remaining+' 秒':label;if(!remaining){button.disabled=false;clearInterval(interval);}};const interval=setInterval(tick,1000);tick();}}});
 }
 handleForm('#login-form',async f=>{await api('/api/login',{method:'POST',body:{username:f.elements.username.value,password:f.elements.password.value}});f.reset();await load();});
-handleForm('#password-form',async f=>{if(f.elements.password.value!==f.elements.confirm.value)throw Error('两次新密码不一致');await api('/api/password',{method:'POST',body:{currentPassword:f.elements.currentPassword.value,password:f.elements.password.value}});f.reset();me=null;await load();tell('密码已更新，请重新登录。');});
+handleForm('#password-form',async f=>{if(f.elements.password.value!==f.elements.confirm.value)throw Error('两次新密码不一致');await api('/api/password',{method:'POST',body:{currentPassword:f.elements.currentPassword.value,password:f.elements.password.value}});f.reset();dropSession();tell('密码已更新，请重新登录。');});
 handleForm('#user-form',async f=>{
  const body=adminUI.profileBody(f),id=f.elements.id.value;
  if(id)await api('/api/admin/users/'+id,{method:'PUT',body});
@@ -186,8 +189,9 @@ handleForm('#user-form',async f=>{
 handleForm('#reset-form',async f=>{await api('/api/admin/users/'+f.elements.id.value+'/password',{method:'POST',body:{password:f.elements.password.value}});f.reset();$('#reset-dialog').close();await loadAdmin();tell('密码已重置，旧会话和订阅链接已失效。');},'#reset-status');
 handleForm('#import-form',async f=>{const file=$('#source-file').files[0];if(!file||file.size>524288)throw Error('请选择不超过 512 KiB 的 YAML');await api('/api/admin/source',{method:'PUT',body:{yaml:await file.text()}});f.reset();await loadAdmin();await refreshUsage({force:true});tell('配置源已更新，请检查授权与中转上游配置。');});
 async function action(button,work,messages){if(button.disabled)return;button.disabled=true;const operation=Promise.resolve().then(work);window.portalToast?.promise(operation,messages);try{await operation;if(!window.portalToast)tell(messages.success);}catch(err){if(!window.portalToast)error(err.message);}finally{button.disabled=false;}}
-$('#logout').onclick=()=>action($('#logout'),async()=>{await api('/api/logout',{method:'POST'});me=null;await load();},{loading:'正在退出…',success:'已退出登录',error:e=>e.message});
-$('#copy-sub').onclick=async()=>{try{await navigator.clipboard.writeText(me.subscriptionUrl);tell('订阅链接已复制，请勿转发。');}catch{$('#subscription').type='text';$('#subscription').select();$('#show-sub').textContent='隐藏';$('#show-sub').setAttribute('aria-pressed','true');tell('已展开链接，请手动复制。','info');}};
+$('#logout').onclick=()=>action($('#logout'),async()=>{await api('/api/logout',{method:'POST'});dropSession();},{loading:'正在退出…',success:'已退出登录',error:e=>e.message});
+let copyReset;
+$('#copy-sub').onclick=async()=>{try{await navigator.clipboard.writeText(me.subscriptionUrl);const button=$('#copy-sub');button.classList.add('copied');button.replaceChildren(icon('check'),node('span','已复制'));clearTimeout(copyReset);copyReset=setTimeout(()=>{button.classList.remove('copied');button.replaceChildren(icon('copy'),node('span','复制订阅链接'));},1800);tell('订阅链接已复制，请勿转发。');}catch{$('#subscription').type='text';$('#subscription').select();$('#show-sub').textContent='隐藏';$('#show-sub').setAttribute('aria-pressed','true');tell('已展开链接，请手动复制。','info');}};
 $('#show-sub').onclick=()=>{const visible=$('#subscription').type==='password';$('#subscription').type=visible?'text':'password';$('#show-sub').textContent=visible?'隐藏':'显示';$('#show-sub').setAttribute('aria-pressed',String(visible));};
 $('#rotate-sub').onclick=()=>{if(!confirm('重置后旧订阅链接立即失效，已下载的节点凭据不变。继续吗？'))return;action($('#rotate-sub'),async()=>{await api('/api/subscription/rotate',{method:'POST'});await load();},{loading:'正在重置…',success:'订阅已重置，请替换客户端中的链接。',error:e=>e.message});};
 $('#refresh').onclick=()=>action($('#refresh'),async()=>{if(me.role==='admin')await loadAdmin();await refreshUsage({force:true,propagate:true});},{loading:'正在刷新…',success:'数据已更新',error:e=>e.message});
@@ -201,4 +205,5 @@ document.addEventListener('keydown',event=>{if(!document.body.classList.contains
 matchMedia('(max-width:850px)').addEventListener('change',()=>mobileMenu(false,false));
 window.addEventListener('hashchange',()=>selectPanel(location.hash.slice(1)));
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshUsage();});
-load().catch(e=>error(e.message));
+window.addEventListener('pageshow',event=>{if(event.persisted){dropSession();load().catch(e=>error(e.message));}});
+load().catch(e=>error(e.message)).finally(()=>document.body.classList.remove('booting'));

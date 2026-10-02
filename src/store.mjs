@@ -40,7 +40,7 @@ export function openStore(directory){
  db.exec('CREATE INDEX IF NOT EXISTS audit_time_id ON audit(at,id)');
  const getUser=id=>db.prepare('SELECT * FROM users WHERE id=?').get(id);
  const getSettings=()=>({...DEFAULT_SETTINGS,...JSON.parse(db.prepare("SELECT value FROM settings WHERE key='admin_config'").get()?.value||'{}')});
- const validatePassword=password=>{if(typeof password!=='string'||password.length<getSettings().minPasswordLength||password.length>128)throw invalid(`密码至少需要 ${getSettings().minPasswordLength} 个字符，最多 128 个字符`);};
+ const validatePassword=password=>{if(typeof password!=='string'||password.length<getSettings().minPasswordLength||password.length>128)throw invalid(`密码至少需要 ${getSettings().minPasswordLength} 个字符，最多 128 个字符`);const p=password.toLowerCase();if(/^(.)\1+$/.test(p)||['123456789012345678901234567890','012345678901234567890123456789','qwertyuiopasdfghjkl'].some(s=>s.includes(p))||['password1234','password12345','qwerty123456','admin12345678'].includes(p))throw invalid('这个密码过于常见，请使用更长的独特密码或密码短语');};
  const isActive=u=>!!u&&!!u.enabled&&(!u.expires_at||u.expires_at>Date.now());
  function profileValues(id,body,u){
   const v={username:body.username??u.username,display_name:body.displayName??u.display_name,email:body.email??u.email,note:body.note??u.note,plan_name:body.planName??u.plan_name,display_gb:body.displayGB===undefined?u.display_gb:body.displayGB,expires_at:body.expiresAt===undefined?u.expires_at:body.expiresAt};

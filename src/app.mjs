@@ -3,17 +3,18 @@ import {fileURLToPath} from 'node:url';
 import {passwordMatches,passwordHash} from './store.mjs';
 import {createMonitorReader} from './monitor.mjs';
 import {VERSION} from './version.mjs';
+import {createAuthGuard,clientAddress} from './auth-guard.mjs';
 const publicDir=fileURLToPath(new URL('../public/',import.meta.url));
 const badPassword=await passwordHash('dummy-password-not-an-account');
-export function createApp({store,origin,subscriptionOrigin=origin,admin=false,monitorReader}){
+export function createApp({store,origin,subscriptionOrigin=origin,admin=false,monitorReader,trustCloudflare=false}){
  const app=express();app.disable('x-powered-by');
  const readMonitor=monitorReader||createMonitorReader(store);
  for(const value of [origin,subscriptionOrigin]){const parsed=new URL(value);if(parsed.origin!==value||(parsed.protocol!=='https:'&&!(parsed.protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(parsed.hostname))))throw Error('Use an exact HTTPS origin or loopback HTTP origin');}
  const parsedOrigin=new URL(origin);
  const secure=parsedOrigin.protocol==='https:',cookieName=secure?'__Host-donson-access':admin?'donson_admin':'donson_local';
  const cookie=(token,maxAge=28800)=>`${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure?'; Secure':''}`;
- let runningPasswords=0;const attempts=new Map();
- function limited(key,limit=8){const now=Date.now();for(const [k,v]of attempts)if(now-v.at>900000)attempts.delete(k);if(attempts.size>=4096&&!attempts.has(key))return true;const value=attempts.get(key)||{at:now,count:0};value.count++;attempts.set(key,value);return value.count>limit;}
+ const guard=createAuthGuard(store,admin?'admin':'user');
+ const throttle=(req,res,action,account)=>{const result=guard.consume(action,account,clientAddress(req,trustCloudflare&&!admin));if(!result.allowed){res.set('Retry-After',String(result.retryAfter)).status(429).json({error:'尝试过多，请稍后重试。',retryAfter:result.retryAfter});return false;}if(!guard.acquire()){res.set('Retry-After','3').status(429).json({error:'登录服务繁忙，请稍后重试。',retryAfter:3});return false;}return result;};
  const tokens=req=>{const parts=(req.headers.cookie||'').split(';').map(s=>s.trim());return parts.find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';};
  app.use((req,res,next)=>{
   res.set({'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",'Cross-Origin-Resource-Policy':'same-origin'});
@@ -35,14 +36,13 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  app.post('/api/login',async(req,res)=>{
   const {username,password}=req.body||{};
   if(typeof username!=='string'||typeof password!=='string'||username.length>40||password.length>128)return res.status(400).json({error:'账号或密码格式无效'});
-  if(limited('login:'+username.toLowerCase())||limited('*global*',120)||runningPasswords>=4)return res.status(429).json({error:'登录尝试过多，请稍后再试'});
-  runningPasswords++;
+  const attempt=throttle(req,res,'login',username);if(!attempt)return;
   try{
-   const u=store.findUser(username);const valid=await passwordMatches(password,u?.password||badPassword);
-   if(!valid||!store.isActive(u)||(admin?u.role!=='admin':u.role==='admin'))return res.status(401).json({error:'账号或密码不正确，或账号不可用'});
-   attempts.delete('login:'+username.toLowerCase());
+   const candidate=store.findUser(username);const valid=await passwordMatches(password,candidate?.password||badPassword),u=candidate&&store.getUser(candidate.id);
+   if(!valid||!store.isActive(u)||u.password!==candidate.password||(admin?u.role!=='admin':u.role==='admin')){if(attempt.attempt===1||attempt.attempt===8)store.audit('security','login-failed',admin?'admin':'user',{attempt:attempt.attempt});return res.status(401).json({error:'账号或密码不正确，或账号不可用'});}
+   guard.clearAccount('login',username);
    const s=store.session(u.id);res.set('Set-Cookie',cookie(s.token,store.getSettings().sessionHours*3600));store.audit(u.username,'login',u.id);res.json({ok:true});
-  }finally{runningPasswords--;}
+  }finally{guard.release();}
  });
  app.use('/api/meter',(req,res,next)=>{const auth=req.headers.authorization;const n=store.meter.authenticate(typeof auth==='string'&&auth.startsWith('Bearer ')?auth.slice(7):'');if(!n)return res.status(401).json({error:'采集身份无效'});req.meterNode=n;next();});
  app.get('/api/meter/desired',(req,res)=>res.json(store.meter.desired(req.meterNode)));
@@ -73,9 +73,8 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  app.get('/api/nodes/status',(req,res)=>res.json({nodes:store.health.nodes(JSON.parse(req.user.grants)),checkIntervalMinutes:store.getSettings().healthCheckMinutes}));
  app.post('/api/logout',(req,res)=>{store.logout(tokens(req));res.set('Set-Cookie',cookie('',0));res.json({ok:true});});
  app.post('/api/password',async(req,res)=>{
-  if(runningPasswords>=4||limited(`password:${req.user.id}`))return res.status(429).json({error:'请稍后重试'});
-  runningPasswords++;
-  try{if(!await passwordMatches(req.body?.currentPassword,req.user.password))return res.status(400).json({error:'当前密码不正确'});await store.setPassword(req.user.id,req.body?.password);store.audit(req.user.username,'password-change',req.user.id);res.set('Set-Cookie',cookie('',0));res.json({ok:true});}finally{runningPasswords--;}
+  if(!throttle(req,res,'password',req.user.id))return;
+  try{if(!await passwordMatches(req.body?.currentPassword,req.user.password))return res.status(400).json({error:'当前密码不正确'});await store.setPassword(req.user.id,req.body?.password);guard.clearAccount('password',req.user.id);store.audit(req.user.username,'password-change',req.user.id);res.set('Set-Cookie',cookie('',0));res.json({ok:true});}finally{guard.release();}
  });
  app.post('/api/subscription/rotate',(req,res)=>{store.rotate(req.user.id);store.audit(req.user.username,'subscription-rotate',req.user.id);res.json({ok:true});});
  app.get('/api/config',(req,res)=>{try{sendConfig(res,req.user);}catch{res.status(403).json({error:'管理员尚未分配可用配置'});}});
@@ -95,8 +94,8 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
   if(!checkGrants(req.body?.grants))return res.status(400).json({error:'节点权限无效'});
   if(typeof req.body?.username!=='string')return res.status(400).json({error:'账号格式无效'});
   if(store.findUser(req.body.username))return res.status(409).json({error:'账号已存在'});
-  const id=await store.createUser(req.body?.username,req.body?.password,req.body.grants,'user',req.body);
-  store.audit(req.user.username,'user-create',id);res.status(201).json({id});
+  if(!throttle(req,res,'admin-write',req.user.id))return;
+  try{const id=await store.createUser(req.body?.username,req.body?.password,req.body.grants,'user',req.body);store.audit(req.user.username,'user-create',id);res.status(201).json({id});}finally{guard.release();}
  });
  app.put('/api/admin/users/:id',(req,res)=>{
   const u=store.getUser(req.params.id);if(!u||u.role==='admin')return res.status(400).json({error:'只能修改普通用户'});
@@ -105,7 +104,8 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  });
  app.post('/api/admin/users/:id/password',async(req,res)=>{
   const u=store.getUser(req.params.id);if(!u||u.role==='admin')return res.status(400).json({error:'只能重置普通用户'});
-  await store.setPassword(u.id,req.body?.password);store.requirePasswordChange(u.id);store.audit(req.user.username,'password-reset',u.id);res.json({ok:true});
+  if(!throttle(req,res,'admin-write',req.user.id))return;
+  try{await store.setPassword(u.id,req.body?.password);store.requirePasswordChange(u.id);store.audit(req.user.username,'password-reset',u.id);res.json({ok:true});}finally{guard.release();}
  });
  app.put('/api/admin/source',(req,res)=>{
   try{store.importSource(req.body?.yaml);}catch{return res.status(400).json({error:'配置无效：请检查节点、策略组和文件大小，未保存任何更改'});}
@@ -113,7 +113,7 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  });
  app.use('/api',(_req,res)=>res.status(404).json({error:'接口不存在'}));
  // Only this directory is public; DB, source YAML and code are never served.
- app.use(express.static(publicDir,{index:'index.html',dotfiles:'deny',cacheControl:false}));
+ app.use(express.static(publicDir,{index:'index.html',dotfiles:'deny',cacheControl:false,setHeaders:(res,file)=>{if(/\.(?:js|css|svg)$/.test(file))res.setHeader('Cache-Control','private, no-cache');}}));
  app.use((_req,res)=>res.status(404).send('页面不存在'));
  app.use((err,_req,res,_next)=>{if(res.headersSent)return res.end();const known=err.statusCode===400||/密码需为|账号需为/.test(err.message);res.status(known?400:err.type==='entity.too.large'?413:err.type==='entity.parse.failed'?400:500).json({error:known?err.message:'请求未完成，请检查输入或联系管理员'});});
  return app;

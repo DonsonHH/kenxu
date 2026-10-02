@@ -5,16 +5,18 @@ const charts=new Map(),palette=['#138c94','#7fc7ba','#638acc','#b095d6','#f2b56b
 const bytes=n=>{if(!n)return '0 B';const units=['B','KB','MB','GB','TB'];let value=n,i=0;while(value>=1024&&i<4){value/=1024;i++;}return value.toFixed(i?1:0)+' '+units[i];};
 function draw(id,type,labels,datasets,{unit='bytes',horizontal=false,stacked=false}={}){
  const canvas=document.getElementById(id);if(!canvas||!canvas.getClientRects().length)return;
- const fingerprint=JSON.stringify([type,labels,datasets,unit,horizontal,stacked]),existing=charts.get(id);
+ const dark=document.documentElement.dataset.theme==='dark',text=dark?'#a7b8c9':'#617786',grid=dark?'#293746':'#edf2f5';
+ const fingerprint=JSON.stringify([type,labels,datasets,unit,horizontal,stacked,dark]),existing=charts.get(id);
  if(existing?.fingerprint===fingerprint){existing.chart.resize();return;}
- existing?.chart.destroy();const nonzero=datasets.some(d=>d.data.some(n=>n!==null&&n>0)),note=canvas.closest('.chart-card')?.querySelector('.chart-note');
+ const nonzero=datasets.some(d=>d.data.some(n=>n!==null&&n>0)),note=canvas.closest('.chart-card')?.querySelector('.chart-note');
  if(note)note.textContent=!labels.length?'暂无数据':!nonzero&&unit==='bytes'?'这个时间段还没有记录到用量':!nonzero&&unit==='ms'?'尚无可用的连接响应':!nonzero&&unit==='count'?'暂无节点':'';
  const formatter=n=>n===null?'未知':unit==='ms'?Math.round(n)+' ms':unit==='percent'?Math.round(n)+'%':unit==='count'?String(n):bytes(n);
  canvas.setAttribute('aria-label',labels.map((l,i)=>l+': '+datasets.map(d=>d.label+' '+(d.data[i]===null?'未知':formatter(d.data[i]||0))).join(', ')).join('; ')||'暂无数据');
- const options={responsive:true,maintainAspectRatio:false,animation:false,devicePixelRatio:Math.min(devicePixelRatio||1,2),normalized:true,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'bottom',labels:{usePointStyle:true,boxWidth:7,padding:18,color:'#6b8292',font:{size:11}}},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+formatter(ctx.raw)}}}};
+ const options={responsive:true,maintainAspectRatio:false,animation:false,devicePixelRatio:Math.min(devicePixelRatio||1,2),normalized:true,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'bottom',labels:{usePointStyle:true,boxWidth:7,padding:18,color:text,font:{size:11}}},tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+formatter(ctx.raw)}}}};
  if(type==='doughnut'){options.cutout='72%';options.plugins.tooltip.callbacks.label=ctx=>ctx.label+': '+formatter(ctx.raw);}
  else {options.indexAxis=horizontal?'y':'x';options.scales={x:{stacked,beginAtZero:horizontal,grid:{display:horizontal,color:'#eef2f5'},ticks:{maxRotation:0,maxTicksLimit:8,color:'#8296a3',font:{size:10},...(horizontal?{callback:v=>formatter(v)}:{})},border:{display:false}},y:{stacked,beginAtZero:!horizontal,grid:{display:!horizontal,color:'#edf2f5'},ticks:{color:'#8296a3',font:{size:10},...(!horizontal?{callback:v=>formatter(v)}:{})},border:{display:false}}};}
- const chart=new Chart(canvas,{type,data:{labels,datasets},options});canvas.dataset.rendered='true';charts.set(id,{chart,fingerprint});
+ if(options.scales)for(const scale of Object.values(options.scales)){scale.ticks.color=text;scale.grid.color=grid;}
+ let chart=existing?.chart;if(chart){chart.data.labels=labels;chart.data.datasets=datasets;chart.options=options;chart.update('none');}else chart=new Chart(canvas,{type,data:{labels,datasets},options});canvas.dataset.rendered='true';charts.set(id,{chart,fingerprint});
 }
 function trend(id,rows,admin=false,bar=false){const color=admin?'#7563c4':'#128c94';draw(id,bar?'bar':'line',rows.map(r=>r.date.slice(5)),[{label:'下载',data:rows.map(r=>r.down),borderColor:color,backgroundColor:bar?color:color+'18',fill:!bar,borderWidth:2,pointRadius:0,pointHitRadius:12,tension:.25,borderRadius:3},{label:'上传',data:rows.map(r=>r.up),borderColor:admin?'#d0b169':'#84cbb9',backgroundColor:admin?'#d0b16960':'#84cbb960',fill:!bar,borderWidth:1.5,pointRadius:0,pointHitRadius:12,tension:.25,borderRadius:3}],{stacked:bar});}
 function render(){
@@ -37,3 +39,4 @@ function render(){
 }
 window.portalCharts={update:(data,status,kind)=>{snapshot=data;health=status;role=kind;render();},monitor:data=>{monitor=data;render();},render,clear:()=>{for(const [id,{chart}]of charts){chart.destroy();const canvas=document.getElementById(id);canvas.removeAttribute('data-rendered');canvas.setAttribute('aria-label','暂无数据');}charts.clear();snapshot=null;health=null;monitor=null;role=null;days=7;for(const button of document.querySelectorAll('[data-chart-days]'))button.setAttribute('aria-pressed',String(button.dataset.chartDays==='7'));}};
 document.addEventListener('click',event=>{const button=event.target.closest('[data-chart-days]');if(!button)return;days=Number(button.dataset.chartDays);for(const b of document.querySelectorAll('[data-chart-days]'))b.setAttribute('aria-pressed',String(b===button));render();});
+window.addEventListener('portal-theme-change',render);

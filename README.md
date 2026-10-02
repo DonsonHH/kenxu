@@ -1,7 +1,7 @@
 # Kenxu
 Private subscription and traffic-accounting portal for trusted friends. Built and maintained by DonsonHH.
 
-Current stable version: **1.0.0**. See [release notes and final review](docs/release-v1.0.0.md).
+Current version: **1.1.0**. See [appearance, authentication and performance review](docs/review-v1.1.0.md), or the [first stable release](docs/release-v1.0.0.md).
 
 ## Features
 
@@ -89,7 +89,7 @@ Stop the portal before making a filesystem copy of its entire private data direc
 
 When permanently removing a disabled ordinary account, record its exact collector identities with `store.meter.retireUserCredentials(id)` before deleting credentials or account rows, in the same transaction. Xray and queued reports can retain counters after client removal. Retirement markers let those reports drain without recreating removed usage; all other unknown or wrong-agent identities remain rejected. Back up first and retain markers with the ledger.
 
-This is a small invitation-only service, not a fully audited public commercial system. Login rate limits are in memory and reset with the process. Disabled managed users are removed on successful collector synchronization; existing long-lived connections can continue until closed. Legacy shared credentials remain outside that revocation mechanism.
+This is a small invitation-only service, not a fully audited public commercial system. Authentication limits persist in SQLite across restarts: per-realm/account/source/global fixed windows and a shared password-work concurrency budget. See the 1.1.0 review for exact thresholds and the trusted Cloudflare-header deployment assumption. Disabled managed users are removed on successful collector synchronization; existing long-lived connections can continue until closed. Legacy shared credentials remain outside that revocation mechanism.
 
 ## License
 
