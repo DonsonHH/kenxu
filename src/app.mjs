@@ -18,11 +18,22 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  const throttle=(req,res,action,account)=>{const result=guard.consume(action,account,clientAddress(req,trustCloudflare&&!admin));if(!result.allowed){res.set('Retry-After',String(result.retryAfter)).status(429).json({error:'尝试过多，请稍后重试。',retryAfter:result.retryAfter});return false;}if(!guard.acquire()){res.set('Retry-After','3').status(429).json({error:'登录服务繁忙，请稍后重试。',retryAfter:3});return false;}return result;};
  const tokens=req=>{const parts=(req.headers.cookie||'').split(';').map(s=>s.trim());return parts.find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';};
  app.use((req,res,next)=>{
-  res.set({'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'no-referrer','X-Robots-Tag':'noindex, nofollow','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",'Cross-Origin-Resource-Policy':'same-origin'});
+  const sensitiveDownload=/^\/s\//i.test(req.path)||/^\/api\/config\/?$/i.test(req.path);
+  res.set({'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':sensitiveDownload?'no-referrer':'same-origin','X-Robots-Tag':'noindex, nofollow','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",'Cross-Origin-Resource-Policy':'same-origin'});
   if(secure)res.set('Strict-Transport-Security','max-age=31536000');
   if(!['GET','HEAD','POST','PUT'].includes(req.method))return res.sendStatus(405);
+  // Only the configured loopback Tunnel may describe the visitor's protocol.
+  // Node sees plain HTTP for both edge protocols; HSTS alone cannot protect
+  // a visitor's first HTTP entry. Never redirect a password or bearer request.
+  if(secure&&!admin&&trustCloudflare&&['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)){
+   let visitor;try{visitor=JSON.parse(req.headers['cf-visitor']||'null');}catch{}
+   if(req.headers['x-forwarded-proto']==='http'||visitor?.scheme==='http'){
+    if(['GET','HEAD'].includes(req.method)&&!sensitiveDownload&&!req.headers.authorization)return res.redirect(308,origin+(req.originalUrl.startsWith('/')?req.originalUrl:'/'));
+    return res.status(403).json({error:'请使用 HTTPS 安全入口，刷新页面后重试',code:'INSECURE_ORIGIN'});
+   }
+  }
   const machineReport=req.method==='POST'&&req.path==='/api/meter/report';
-  if(!machineReport&&!['GET','HEAD'].includes(req.method)&&req.headers.origin!==origin)return res.status(403).json({error:'请求来源不匹配，请从本站页面操作'});
+  if(!machineReport&&!['GET','HEAD'].includes(req.method)&&req.headers.origin!==origin)return res.status(403).json({error:'请求来源不匹配，请从本站正确入口打开并刷新页面',code:'ORIGIN_MISMATCH'});
   next();
  });
  app.use(express.json({limit:'600kb',strict:true}));

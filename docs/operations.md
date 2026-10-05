@@ -13,9 +13,15 @@
 
 HTTPS 用户入口会在请求来自回环地址时信任 Cloudflare 设置的 `CF-Connecting-IP`，用于来源限流。此配置依赖“源服务仅绑定回环、公开访问经 Tunnel”的部署方式。私有管理端忽略转发 IP 头。
 
+同一受信任入口通过 Cloudflare 的协议头区分访客使用的 HTTP／HTTPS。普通 HTTP 页面请求会跳转到 `PUBLIC_ORIGIN` 的 HTTPS 地址；密码提交、Bearer 请求及配置下载不会被自动重放，而是拒绝不安全的入口。不要仅依赖 HSTS：它不能保证从未访问过网站的浏览器第一次就使用 HTTPS。也建议在 Cloudflare 为站点开启 HTTPS 跳转。
+
+登录与操作页面使用 `Referrer-Policy: same-origin`，不向外站发送引用地址，并兼容浏览器同源请求的 Origin 生成；订阅和配置下载继续使用 `no-referrer` 与 `no-store`。来源为空、`null` 或不匹配的写请求仍被拒绝，不以 Referer 或转发头替代 Origin／CSRF 校验。
+
 ## 私有管理入口
 
 浏览器通过本地转发访问 `http://127.0.0.1:4451`，然后使用管理员账号登录。`ADMIN_ORIGIN` 必须与这个浏览器地址一致。
+
+遇到“请求来源不匹配”，先确认用户端使用完整的 HTTPS 地址，管理端使用上面的 `127.0.0.1` 地址，不要混用 `localhost`、别名或其他端口。遇到“操作验证失败”，刷新当前页重新加载会话；其他标签页重新登录或管理员重置账号可能使旧令牌失效。不要通过允许 `Origin: null` 或关闭 CSRF 来解决。
 
 Windows 可以使用仓库的桌面启动器：
 

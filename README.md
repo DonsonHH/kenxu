@@ -6,7 +6,7 @@
 
 管理员集中维护线路、分配账号与权限；用户登录后领取自己的配置，查看用量和连接状态。Kenxu 使用 Node.js 与 SQLite，当前部署运行在 Jetson 上，通过 Cloudflare Tunnel 提供 HTTPS 访问，管理后台经私有 SSH 转发访问。
 
-当前代码版本 **1.2.1** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
+当前代码版本 **1.2.2** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
 
 ## 界面预览
 
@@ -121,6 +121,8 @@ pnpm test:browser
 
 刷新行为的复现脚本为 `node test/refresh-performance.mjs`。源码修改后运行 `pnpm build`，再提交相应构建资源。当前检查涵盖账号与权限隔离、认证限流、订阅元数据、月边界、流量去重、删除账号后的旧计数、主题与移动端交互。
 
+登录来源兼容性检查为 `node test/browser-origin.mjs`，已纳入浏览器测试。默认使用 Chromium；设置 `PLAYWRIGHT_BROWSER=firefox` 或 `webkit` 可单独复测相应引擎，需要先安装对应的 Playwright 浏览器。测试同时覆盖真实登录页面、首次改密引导、私有管理端，以及错误来源与 CSRF 的拒绝行为。
+
 ```text
 src/          服务端、数据存储、计量、连接检测与前端构建入口
 public/       页面、可编辑样式、浏览器模块与构建产物
@@ -132,7 +134,7 @@ docs/         用户指南、部署维护、版本 review 与界面截图
 
 ## 安全与维护
 
-用户端与管理端校验不同角色，使用 HttpOnly／SameSite 会话、Origin 与 CSRF 校验。登录限流持久化到数据库，包含账号、来源及总量限制，并约束密码计算并发。当前版本没有 TOTP／WebAuthn。
+用户端与管理端校验不同角色，使用 HttpOnly／SameSite 会话、Origin 与 CSRF 校验。公开入口在显示登录表单前将普通 HTTP 访问跳转至 HTTPS，敏感 HTTP 请求直接拒绝；只有配置为受信任的回环 Tunnel 接收头会用于识别访客协议。登录限流持久化到数据库，包含账号、来源及总量限制，并约束密码计算并发。当前版本没有 TOTP／WebAuthn。
 
 订阅链接是访问凭据。不要将密码、链接、私有 YAML、SQLite 数据、节点密钥或真实用户截图提交到仓库，也不要对订阅／采集接口启用共享缓存或交互式浏览器验证。静态资源使用校验缓存，敏感响应保留 `no-store`。
 
@@ -142,7 +144,7 @@ docs/         用户指南、部署维护、版本 review 与界面截图
 
 欢迎通过 [Issues](https://github.com/DonsonHH/kenxu/issues) 提交问题和改进建议。描述版本、复现步骤、预期与实际结果，截图及日志请先移除账号凭据。涉及安全问题时，请先联系维护者确认私下报告方式。
 
-提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md)、[移动端适配](docs/review-mobile-v1.2.0.md) 和[教程交互优化](docs/review-guide-v1.2.1.md)。
+提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md)、[移动端适配](docs/review-mobile-v1.2.0.md)、[教程交互优化](docs/review-guide-v1.2.1.md) 和[登录入口安全](docs/review-login-v1.2.2.md)。
 
 ## 致谢与许可
 

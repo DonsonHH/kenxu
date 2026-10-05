@@ -145,7 +145,7 @@ async function refreshUsage({force=false,propagate=false}={}){
  finally{if(usageTask===task)usageTask=null;}})();usageTask=task;try{return await task.promise;}catch(err){if(propagate)throw err;}
 }
 async function api(url,{method='GET',body}={}){
- let response;try{response=await fetch(url,{method,headers:{...(body?{'Content-Type':'application/json'}:{}),...(me?.csrf?{'X-CSRF-Token':me.csrf}:{})},body:body?JSON.stringify(body):undefined,credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000)});}catch(err){throw Error(err.name==='TimeoutError'?'请求超时，请稍后重试。':'网络暂不可用，请稍后重试。');}
+ let response;try{response=await fetch(url,{method,mode:'same-origin',referrerPolicy:'same-origin',headers:{...(body?{'Content-Type':'application/json'}:{}),...(me?.csrf?{'X-CSRF-Token':me.csrf}:{})},body:body?JSON.stringify(body):undefined,credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(15000)});}catch(err){throw Error(err.name==='TimeoutError'?'请求超时，请稍后重试。':'网络暂不可用，请稍后重试。');}
  let data;try{data=await response.json();}catch{throw Error('无法读取服务器响应，请稍后重试。');}
  if(!response.ok){const failure=Error(data.error||'请求失败');failure.status=response.status;failure.retryAfter=Number(data.retryAfter||response.headers.get('Retry-After'))||0;throw failure;}return data;
 }
