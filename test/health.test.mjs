@@ -9,3 +9,14 @@ test('node status uses real dated checks, not meter heartbeat; source changes an
  assert.deepEqual(probeEnvironment({PATH:'fixture',http_proxy:'other',HTTPS_PROXY:'other',ALL_PROXY:'other',NO_PROXY:'*',no_proxy:'*'}),{PATH:'fixture'});
  }finally{Date.now=realNow;s.close();await rm(dir,{recursive:true,force:true});}
 });
+
+test('health retains legacy timing meaning and stores split HTTPS response/setup timing without rewriting history',async()=>{
+ const dir=await mkdtemp(path.join(tmpdir(),'health-timing-')),s=openStore(dir);try{
+  s.importSource('proxies: [{name: One, type: vless, server: fixture.example, port: 443, uuid: fixture}]');const node=s.inventory()[0],proxy=s.source().proxies[0],at=Date.now();
+  s.health.record(node.id,proxy,{status:'normal',at:at-1000,latency:1250});assert.equal(s.health.nodes()[0].latencyMetric,'http-total-v1');
+  s.health.record(node.id,proxy,{status:'normal',at,latency:80,setupMs:980,totalMs:1200,metric:'http-response-v2',target:'gstatic-204'});
+  const result=s.health.nodes()[0];assert.equal(result.latency,80);assert.equal(result.setupMs,980);assert.equal(result.totalMs,1200);assert.equal(result.latencyMetric,'http-response-v2');assert.equal(result.target,'gstatic-204');
+  assert.equal(result.history[0].latency,1250);assert.equal(result.history[0].latencyMetric,'http-total-v1');assert.equal(result.history[1].latencyMetric,'http-response-v2');
+  assert.throws(()=>s.health.record(node.id,proxy,{status:'normal',at:at+1,latency:100,setupMs:1000,totalMs:500,metric:'http-response-v2',target:'gstatic-204'}));
+ }finally{s.close();await rm(dir,{recursive:true,force:true});}
+});

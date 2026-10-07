@@ -2,6 +2,7 @@ import {spawn} from 'node:child_process';
 import {writeFile,mkdtemp,rm} from 'node:fs/promises';
 import path from 'node:path';
 import net from 'node:net';
+import {measureHttp} from './http-probe.mjs';
 export function probeConfiguration(proxy,port){
  if(proxy.type!=='vless'||!['tcp',undefined].includes(proxy.network)||!proxy['reality-opts']||typeof proxy.uuid!=='string')throw Error('Unsupported probe transport');
  return {log:{loglevel:'none'},inbounds:[{listen:'127.0.0.1',port,protocol:'socks',settings:{udp:false}}],outbounds:[{protocol:'vless',settings:{vnext:[{address:proxy.server,port:proxy.port,users:[{id:proxy.uuid,encryption:'none',flow:proxy.flow||''}]}]},streamSettings:{network:'tcp',security:'reality',realitySettings:{serverName:proxy.servername,fingerprint:proxy['client-fingerprint']||'chrome',publicKey:proxy['reality-opts']['public-key'],shortId:String(proxy['reality-opts']['short-id']??'')}}}]};
@@ -19,11 +20,7 @@ export async function probeNode(proxy,{directory,binary='/usr/local/bin/xray'}={
   if(coreError||core.exitCode!==null)return {at,status:'failed',latency:null};
   // Small authenticated requests, never a throughput test. No UUID/token/log
   // leaves the private staging directory; legacy personal clients are unmetered.
-  for(const target of ['https://www.cloudflare.com/cdn-cgi/trace','https://www.gstatic.com/generate_204']){
-   const started=Date.now(),result=await run('curl',['--disable','--silent','--max-time','10','--socks5-hostname','127.0.0.1:'+port,'--output','/dev/null','--write-out','%{http_code}',target],12000);
-   if(result.code===0&&/^2\d\d$/.test(result.output.trim()))return {at:Date.now(),status:'normal',latency:Date.now()-started};
-  }
-  return {at:Date.now(),status:'failed',latency:null};
+  return {at:Date.now(),...await measureHttp(port,{execute:run})};
  }catch{return {at:Date.now(),status:'failed',latency:null};}
  finally{if(core?.pid&&core.exitCode===null&&core.signalCode===null)await new Promise(resolve=>{const timer=setTimeout(()=>{core.kill('SIGKILL');finish();},2000);function finish(){clearTimeout(timer);core.off('exit',finish);resolve();}core.once('exit',finish);core.kill('SIGTERM');});if(dir)await rm(dir,{recursive:true,force:true});}
 }

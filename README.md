@@ -6,9 +6,13 @@
 
 管理员集中维护线路、分配账号与权限；用户登录后领取自己的配置，查看用量和连接状态。Kenxu 使用 Node.js 与 SQLite，当前部署运行在 Jetson 上，通过 Cloudflare Tunnel 提供 HTTPS 访问，管理后台经私有 SSH 转发访问。
 
-当前代码版本 **1.3.0** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
+当前代码版本 **1.4.0** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
 
 ## 界面预览
+
+1.4.0 增加用户端本地矢量装饰、静态渐变与轻量过渡，两端支持 2K／4K 居中布局。布局按 CSS 视口和系统缩放自适应，不按物理分辨率盲目放大文字。键盘、减少动态效果及手机深色布局有独立回归。
+
+![用户端登录界面，静态背景与本地矢量装饰](docs/images/v1.4-user-login.png)
 
 支持浅色、深色和跟随系统，适配桌面与手机。以下门户截图使用虚构测试账号和用量。
 
@@ -116,6 +120,7 @@ pnpm start
 - 用量按受管入口的上传与下载合计，月视图采用北京时间自然月；每月重算月视图，累计记录保留。
 - Clash Verge 通过订阅响应头读取本月用量；它的卡片通常在更新订阅时才刷新。导入本地 YAML 文件不会自动获取这些响应头。
 - 网页的“正常”表示 Jetson 最近一次通过源节点成功访问了检测网站。个人网络和公开中转入口可能有不同结果，客户端测试仍有参考价值。
+- 新检测将 HTTP 响应与连接准备、全程耗时分开：响应数字是开始 HTTP 传输到首字节的时间，不包括 DNS／代理／TLS 建链，也不是 ICMP ping。两端可展开查看细则，旧记录仍标为全程口径，不与新数字混算。
 - 直连、旧共享凭据或绕过受管入口的连接，无法归入某位用户。核心突然退出时，最后尚未上报的字节可能丢失。
 - 监测站中的主机网络数据与用户代理用量口径不同，界面分开展示。
 
@@ -167,7 +172,7 @@ docs/         用户指南、部署维护、版本 review 与界面截图
 
 欢迎通过 [Issues](https://github.com/DonsonHH/kenxu/issues) 提交问题和改进建议。描述版本、复现步骤、预期与实际结果，截图及日志请先移除账号凭据。涉及安全问题时，请先联系维护者确认私下报告方式。
 
-提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md)、[移动端适配](docs/review-mobile-v1.2.0.md)、[教程交互优化](docs/review-guide-v1.2.1.md)、[登录入口安全](docs/review-login-v1.2.2.md) 和[规则兼容／个人分配](docs/review-rules-v1.3.0.md)。
+提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md)、[移动端适配](docs/review-mobile-v1.2.0.md)、[教程交互优化](docs/review-guide-v1.2.1.md)、[登录入口安全](docs/review-login-v1.2.2.md)、[规则兼容／个人分配](docs/review-rules-v1.3.0.md) 和[大屏／检测口径／体验](docs/review-experience-v1.4.0.md)。
 
 ## 致谢与许可
 

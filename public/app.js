@@ -1,11 +1,11 @@
 import {UI_REFRESH_SECONDS,DISPLAY_ALLOWANCE_BYTES} from '/policy.js';
 import {createAdminUI} from '/admin.js';
-import {pointerMotion,revealPanel} from '/motion.js';
+import {pointerMotion,revealPanel,revealView} from '/motion.js';
 import {CLIENTS,detectPlatform,clientImport} from '/client-imports.js';
 import {createGuideUI} from '/guide-ui.js';
 import {createRulesUI} from '/rules-ui.js';
 const $=selector=>document.querySelector(selector);
-let me=null,adminState=null,adminUsage=null,timer=null,currentPanel='dashboard',usageTask=null,lastUsageAt=0;
+let me=null,adminState=null,adminUsage=null,timer=null,currentPanel='dashboard',usageTask=null,lastUsageAt=0,shownView='';
 let realm={adminInterface:false,policy:{uiRefreshSeconds:UI_REFRESH_SECONDS}};
 let lastHealth=null;
 const rendered=new Map();
@@ -94,7 +94,10 @@ function routeCard(n,r,{admin=false}={}){
  const h=lastHealth?.nodes.find(h=>h.id===n.id),healthLabels={normal:'正常',failed:'异常',pending:'待检测',stale:'待更新',unsupported:'暂不支持'};
  const online=admin?!!r?.enabled&&r.last_seen>Date.now()-90000:h?.status==='normal',status=admin?(!r?'未计量':online?'采集正常':'采集暂离线'):healthLabels[h?.status||'pending'];
  top.append(info,node('span',status,'chip '+(online?'online':h?.status==='failed'?'failed':'pending')));card.append(top);
- if(!admin){const values=node('div',undefined,'node-metrics');for(const [label,value]of [['检测响应',h?.latency===null||h?.latency===undefined?'—':h.latency+' ms'],['本月用量',r?total(r.month):'—']]){const item=node('span',label);item.append(node('strong',value));values.append(item);}card.append(values);const strip=node('div',undefined,'status-strip');strip.setAttribute('aria-label','最近连接检测结果');for(const sample of h?.history.slice(-24)||[]){const bar=node('span',undefined,sample.status);bar.title=time(sample.at)+' · '+(healthLabels[sample.status]||sample.status);strip.append(bar);}if(!strip.children.length)strip.append(node('span',undefined,'pending'));card.append(strip);}
+ const split=h?.latencyMetric==='http-response-v2',measured=h?.status==='normal'&&Number.isFinite(h.latency),values=node('div',undefined,'node-metrics');
+ for(const [label,value]of [[split?'HTTP 响应':'全程检测',measured?h.latency+' ms':'—'],[admin?'连接准备':'本月用量',admin?measured&&split?h.setupMs+' ms':'—':r?total(r.month):'—']]){const item=node('span',label);item.append(node('strong',value));values.append(item);}card.append(values);
+ if(measured&&split){const details=node('details',undefined,'latency-breakdown');details.append(node('summary','查看检测耗时'),node('p',`连接准备 ${h.setupMs} ms · HTTP 响应 ${h.latency} ms · 全程 ${h.totalMs} ms`));details.append(node('p','Jetson → 节点 → '+(h.target==='gstatic-204'?'Gstatic 204':'Cloudflare trace')+'。HTTP 响应不含 DNS、代理和 TLS 建链；不是 ICMP ping，也不是你本机的测速结果。','fine'));card.append(details);}
+ if(!admin){const strip=node('div',undefined,'status-strip');strip.setAttribute('aria-label','最近连接检测结果');for(const sample of h?.history.slice(-24)||[]){const bar=node('span',undefined,sample.status);bar.title=time(sample.at)+' · '+(healthLabels[sample.status]||sample.status);strip.append(bar);}if(!strip.children.length)strip.append(node('span',undefined,'pending'));card.append(strip);}
  card.append(node('p',(admin?'最近采样 · ':'Jetson 检测 · ')+time(admin?r?.last_seen:h?.checkedAt),'fine'));return card;
 }
 function renderDaily(rows){
@@ -153,9 +156,11 @@ async function api(url,{method='GET',body}={}){
  if(!response.ok){const failure=Error(data.error||'请求失败');failure.status=response.status;failure.retryAfter=Number(data.retryAfter||response.headers.get('Retry-After'))||0;throw failure;}return data;
 }
 function show(view){
+ const changed=shownView!==view;shownView=view;
  for(const id of ['login-view','user-view','admin-view','password-view'])$('#'+id).hidden=id!==view;
  const authenticated=!!me&&!me.mustChange;document.body.classList.toggle('guest',!authenticated);$('#workspace-nav').hidden=!authenticated;
  for(const id of ['page-heading','menu-toggle','refresh','header-password'])$('#'+id).hidden=!authenticated;
+ if(changed&&!document.body.classList.contains('booting')&&!realm.adminInterface)revealView($('#'+view));
 }
 async function load(){
  clearInterval(timer);
@@ -229,4 +234,4 @@ matchMedia('(max-width:850px)').addEventListener('change',()=>mobileMenu(false,f
 window.addEventListener('hashchange',()=>selectPanel(location.hash.slice(1)));
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)refreshUsage();});
 window.addEventListener('pageshow',event=>{if(event.persisted){dropSession();load().catch(e=>error(e.message));}});
-load().catch(e=>error(e.message)).finally(()=>document.body.classList.remove('booting'));
+load().catch(e=>error(e.message)).finally(()=>{document.body.classList.remove('booting');if(!me&&!realm.adminInterface)revealView($('#login-view'),{initial:true});});
