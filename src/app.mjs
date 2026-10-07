@@ -43,7 +43,7 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
   if(format!==undefined&&!['shadowrocket','stash'].includes(format))return res.status(400).json({error:'不支持的订阅格式'});
   const configuration=store.config(user),month=store.meter.totals(user.id).month;
   const mobile=format==='shadowrocket',body=mobile?shadowrocketSubscription(configuration):format==='stash'?stashConfiguration(configuration):configuration;
-  res.set({'Content-Type':mobile?'text/plain; charset=utf-8':'text/yaml; charset=utf-8','Content-Disposition':'attachment; filename="'+(mobile?'Kenxu.txt':'Kenxu.yaml')+'"',
+  res.set({'Content-Type':mobile?'text/plain; charset=utf-8':'text/yaml; charset=utf-8','Content-Disposition':'attachment; filename='+(mobile?'Kenxu.txt':'Kenxu.yaml'),
    'Profile-Title':'Kenxu',
    'profile-update-interval':String(store.getSettings().subscriptionMinutes/60),'profile-web-page-url':subscriptionOrigin,
    'subscription-userinfo':`upload=${month.up}; download=${month.down}; total=${store.displayBytes(user)}${user.expires_at?'; expire='+Math.floor(user.expires_at/1000):''}`}).send(body);
@@ -82,7 +82,7 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
   const u=req.user,allowed=new Set(JSON.parse(u.grants));
   const meters=store.meter.nodes();
   const enrollments=new Set(store.db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(u.id).map(n=>n.node_id));
-  res.json({username:u.username,displayName:u.display_name||u.username,planName:u.plan_name||'好友共享',role:u.role,mustChange:!!u.must_change,csrf:u.csrf,nodes:store.inventory().filter(n=>{const m=meters.find(m=>m.proxy_id===n.id);return allowed.has(n.id)&&(!m||m.enabled&&(m.kind!=='relay'||enrollments.has(m.id)));}).map(n=>({...n,metered:meters.some(m=>m.enabled&&m.proxy_id===n.id),kind:meters.find(m=>m.proxy_id===n.id)?.kind||'unmanaged'})),subscriptionUrl:!u.must_change&&u.role==='user'?`${subscriptionOrigin}/s/${store.subscription(u)}.yaml`:null,adminInterface:admin});
+  res.json({username:u.username,displayName:u.display_name||u.username,planName:u.plan_name||'好友共享',role:u.role,mustChange:!!u.must_change,csrf:u.csrf,nodes:store.inventory().filter(n=>{const m=meters.find(m=>m.proxy_id===n.id);return allowed.has(n.id)&&(!m||m.enabled&&enrollments.has(m.id));}).map(n=>({...n,metered:meters.some(m=>m.enabled&&m.proxy_id===n.id),kind:meters.find(m=>m.proxy_id===n.id)?.kind||'unmanaged'})),subscriptionUrl:!u.must_change&&u.role==='user'?`${subscriptionOrigin}/s/${store.subscription(u)}.yaml`:null,adminInterface:admin});
  });
  app.get('/api/usage',(req,res)=>res.json(store.meter.usage(req.user.id)));
  app.get('/api/nodes/status',(req,res)=>res.json({nodes:store.health.nodes(JSON.parse(req.user.grants)),checkIntervalMinutes:store.getSettings().healthCheckMinutes}));
@@ -95,6 +95,14 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  app.get('/api/config',(req,res)=>{try{sendConfig(res,req.user,req.query.format);}catch{res.status(403).json({error:'管理员尚未分配可用配置，或客户端不支持该线路格式'});}});
  app.use('/api/admin',(req,res,next)=>{if(!admin||req.user.role!=='admin')return res.status(403).json({error:'此操作仅限私有管理入口'});next();});
  const checkGrants=grants=>Array.isArray(grants)&&grants.length<=200&&grants.every(id=>typeof id==='string'&&store.inventory().some(n=>n.id===id));
+ app.get('/api/admin/rules',(_req,res)=>res.json(store.rulesState()));
+ app.post('/api/admin/rules/preview',(req,res)=>{
+  const body=req.body;if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).some(k=>!['userId','patch'].includes(k))||body.userId!==null&&(typeof body.userId!=='string'||body.userId.length>100))return res.status(400).json({error:'规则预览范围无效'});
+  res.json(store.previewRules(body.patch,body.userId));
+ });
+ app.put('/api/admin/rules',(req,res)=>{const result=store.saveRules(req.body);store.audit(req.user.username,'rules-global-update','configuration',{count:result.rules.length});res.json(result);});
+ app.get('/api/admin/users/:id/rules',(req,res)=>res.json(store.rulesState(req.params.id)));
+ app.put('/api/admin/users/:id/rules',(req,res)=>{const result=store.saveRules(req.body,req.params.id);store.audit(req.user.username,'rules-user-update',req.params.id,{mode:result.mode,count:result.rules.length});res.json(result);});
  app.get('/api/admin/settings',(_req,res)=>res.json(store.getSettings()));
  app.get('/api/admin/monitor',async(_req,res)=>res.json(await readMonitor()));
  app.put('/api/admin/settings',(req,res)=>{const settings=store.setSettings(req.body);store.audit(req.user.username,'settings-update','system',{fields:Object.keys(req.body)});res.json(settings);});
@@ -130,6 +138,6 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  // Only this directory is public; DB, source YAML and code are never served.
  app.use(express.static(publicDir,{index:'index.html',dotfiles:'deny',cacheControl:false,setHeaders:(res,file)=>{if(/\.(?:js|css|svg)$/.test(file))res.setHeader('Cache-Control','private, no-cache');}}));
  app.use((_req,res)=>res.status(404).send('页面不存在'));
- app.use((err,_req,res,_next)=>{if(res.headersSent)return res.end();const known=err.statusCode===400||/密码需为|账号需为/.test(err.message);res.status(known?400:err.type==='entity.too.large'?413:err.type==='entity.parse.failed'?400:500).json({error:known?err.message:'请求未完成，请检查输入或联系管理员'});});
+ app.use((err,_req,res,_next)=>{if(res.headersSent)return res.end();const known=err.statusCode===400||err.statusCode===409||/密码需为|账号需为/.test(err.message);res.status(known?(err.statusCode===409?409:400):err.type==='entity.too.large'?413:err.type==='entity.parse.failed'?400:500).json({error:known?err.message:'请求未完成，请检查输入或联系管理员'});});
  return app;
 }

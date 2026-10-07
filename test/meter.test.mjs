@@ -14,7 +14,7 @@ test('per-user counters: idempotent samples, restart, isolated reset and persist
  for(const id of [a,b,legacy])store.db.prepare('UPDATE users SET must_change=0 WHERE id=?').run(id);
  const reg=store.meter.register(route,'Pilot');const node=store.meter.authenticate(reg.token);store.meter.allowUser(node.id,a);store.meter.allowUser(node.id,b);
  const d=store.meter.desired(node);assert.equal(d.clients.length,2);assert.notEqual(d.clients[0].id,d.clients[1].id);
- const aConfig=YAML.parse(store.config(store.getUser(a))),bConfig=YAML.parse(store.config(store.getUser(b)));assert.notEqual(aConfig.proxies[0].uuid,bConfig.proxies[0].uuid);assert.equal(YAML.parse(store.config(store.getUser(legacy))).proxies[0].uuid,'legacy-secret');
+ const aConfig=YAML.parse(store.config(store.getUser(a))),bConfig=YAML.parse(store.config(store.getUser(b)));assert.notEqual(aConfig.proxies[0].uuid,bConfig.proxies[0].uuid);assert.throws(()=>store.config(store.getUser(legacy)),/尚未分配/,'Managed pilot nodes no longer fall back to shared credentials for unenrolled users');
  const ca=d.clients.find(c=>c.email.includes(a)),cb=d.clients.find(c=>c.email.includes(b));
  const at=Date.now();const report=(seq,up,down,epoch='epoch-1')=>({seq,epoch,at:at+seq,revision:d.revision,counters:[{email:ca.email,up,down},{email:cb.email,up:0,down:0}]});
  const r1=report(1,100,500);store.meter.report(node,r1);assert.equal(store.meter.usage(a).total.down,500);assert.equal(store.meter.usage(b).total.down,0);

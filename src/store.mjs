@@ -3,10 +3,12 @@ import {randomBytes,randomUUID,createHash,createHmac,scrypt as rawScrypt,timingS
 import {promisify} from 'node:util';
 import {mkdirSync,readFileSync,writeFileSync,chmodSync} from 'node:fs';
 import path from 'node:path';
-import {parseSource,inventory,generateConfig} from './config.mjs';
+import YAML from 'yaml';
+import {parseSource,inventory,generateConfig,ruleTargets} from './config.mjs';
 import {createMeter} from './meter.mjs';
 import {createHealth} from './health.mjs';
 import {DEFAULT_SETTINGS,validateSettings,invalid} from './settings.mjs';
+import {validateRules,BUILTIN_TARGETS,effectiveRules,ruleParts} from './rules.mjs';
 const scrypt=promisify(rawScrypt);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const safeEqual=(a,b)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
@@ -34,6 +36,7 @@ export function openStore(directory){
  CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id), csrf TEXT NOT NULL, expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY,at INTEGER NOT NULL,actor TEXT NOT NULL,action TEXT NOT NULL,target TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS user_rule_profiles(user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,mode TEXT NOT NULL CHECK(mode IN ('inherit','prepend','replace')),rules TEXT NOT NULL,revision TEXT NOT NULL,updated_at INTEGER NOT NULL);
  `);
  for(const [name,type]of [['display_name',"TEXT NOT NULL DEFAULT ''"],['email',"TEXT NOT NULL DEFAULT ''"],['note',"TEXT NOT NULL DEFAULT ''"],['plan_name',"TEXT NOT NULL DEFAULT ''"],['display_gb','REAL'],['expires_at','INTEGER']])if(!db.prepare('PRAGMA table_info(users)').all().some(c=>c.name===name))db.exec(`ALTER TABLE users ADD COLUMN ${name} ${type}`);
  if(!db.prepare('PRAGMA table_info(audit)').all().some(c=>c.name==='details'))db.exec("ALTER TABLE audit ADD COLUMN details TEXT NOT NULL DEFAULT '{}'");
@@ -79,8 +82,53 @@ export function openStore(directory){
  let cachedText,cachedSource;
  const source=()=>{const text=db.prepare('SELECT value FROM settings WHERE key=?').get('source')?.value;if(text!==cachedText){cachedSource=text?parseSource(text):null;cachedText=text;}return cachedSource?structuredClone(cachedSource):null;};
  const subscription=u=>`${u.id}.${createHmac('sha256',key).update(u.id+':'+u.version).digest('base64url')}`;
+ const ruleProfile=id=>{const row=db.prepare('SELECT * FROM user_rule_profiles WHERE user_id=?').get(id);return row?{mode:row.mode,rules:JSON.parse(row.rules),revision:row.revision,updatedAt:row.updated_at}:{mode:'inherit',rules:[],revision:'initial',updatedAt:null};};
+ function userRuleSource(s,user){
+  const grants=new Set(JSON.parse(user.grants)),meters=store.meter.nodes(),enrolled=new Set(db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(user.id).map(row=>row.node_id));
+  const available=new Set(inventory(s).filter(n=>{const meter=meters.find(m=>m.proxy_id===n.id);return grants.has(n.id)&&(!meter||meter.enabled&&enrolled.has(meter.id));}).map(n=>n.name));
+  return {...s,proxies:s.proxies.filter(p=>available.has(p.name))};
+ }
+ function rulesState(userId=null){
+  const s=source();if(!s)throw invalid('请先导入私有配置源');
+  const sourceRevision=hash(db.prepare("SELECT value FROM settings WHERE key='source'").get().value);
+  if(userId===null)return {scope:'global',mode:'global',rules:s.rules||[],revision:sourceRevision,targets:[...BUILTIN_TARGETS,...s.proxies.map(p=>p.name),...(s['proxy-groups']||[]).map(g=>g.name)],providers:Object.keys(s['rule-providers']||{})};
+  const u=getUser(userId);if(!u||u.role!=='user')throw invalid('只能为现有普通用户分配规则');
+  const profile=ruleProfile(userId),available=userRuleSource(s,u),targets=ruleTargets(available,JSON.parse(u.grants));
+  return {scope:'user',userId,username:u.username,mode:profile.mode,rules:profile.rules,updatedAt:profile.updatedAt,revision:hash(JSON.stringify([sourceRevision,profile.revision,u.grants,targets])),targets,providers:Object.keys(s['rule-providers']||{}),baseRuleCount:(s.rules||[]).length};
+ }
+ function preparedRules(patch,current){
+  const s=source(),user=current.scope==='user';
+  if(!patch||typeof patch!=='object'||Array.isArray(patch)||Object.keys(patch).some(k=>!(user?['rules','revision','mode']:['rules','revision']).includes(k)))throw invalid('规则编辑字段无效');
+  if(patch.revision!==current.revision)throw Object.assign(Error('规则、配置源或授权已被更新，请重新载入后再保存'),{statusCode:409});
+  const mode=user?patch.mode:'global';if(user&&!['inherit','prepend','replace'].includes(mode))throw invalid('请选择继承、优先补充或独立规则');
+  let rules=validateRules(patch.rules,s,{targets:current.targets,prepend:mode==='prepend'});
+  if(mode==='inherit'&&rules.length)throw invalid('继承模式不能同时保存个人规则');
+  if(mode==='replace'&&!rules.some(rule=>rule.startsWith('MATCH,'))){
+   const fallback=(s.rules||[]).findLast(rule=>ruleParts(rule).type==='MATCH'),target=fallback?ruleParts(fallback).target:current.targets.find(t=>!BUILTIN_TARGETS.includes(t));
+   rules.push('MATCH,'+(current.targets.includes(target)?target:'REJECT'));
+  }
+  return {mode,rules};
+ }
+ function saveRules(patch,userId=null){
+  db.exec('BEGIN IMMEDIATE');try{
+   const current=rulesState(userId),{mode,rules}=preparedRules(patch,current);
+   if(userId===null){const text=YAML.stringify({...source(),rules});parseSource(text);db.prepare("UPDATE settings SET value=? WHERE key='source'").run(text);}
+   else db.prepare('INSERT INTO user_rule_profiles VALUES(?,?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET mode=excluded.mode,rules=excluded.rules,revision=excluded.revision,updated_at=excluded.updated_at').run(userId,mode,JSON.stringify(rules),randomBytes(16).toString('hex'),Date.now());
+   db.exec('COMMIT');return rulesState(userId);
+  }catch(error){db.exec('ROLLBACK');throw error;}
+ }
+ function previewRules(patch,userId=null){
+  const current=rulesState(userId),profile=preparedRules(patch,current),s=source();
+  const raw=userId===null?profile.rules:effectiveRules(s.rules||[],profile),available=userId===null?s:userRuleSource(s,getUser(userId));
+  const grants=userId===null?inventory(s).map(n=>n.id):JSON.parse(getUser(userId).grants),warnings=[];
+  if(!available.proxies.length)warnings.push({code:'NO_NODES',message:'尚未授权可用节点；先分配线路后才能领取订阅。'});
+  const denied=raw.filter(rule=>!current.targets.includes(ruleParts(rule).target)).length;
+  if(denied)warnings.push({code:'UNAUTHORIZED_TARGET',count:denied,message:`${denied} 条继承规则的目标未授权，导出时使用 REJECT。`});
+  let output=[];try{if(available.proxies.length)output=YAML.parse(generateConfig({...available,rules:raw},grants)).rules;}catch(error){throw invalid(error.message);}
+  return {scope:current.scope,mode:profile.mode,effectiveRules:output,count:output.length,convertedCount:raw.filter(rule=>/^PROCESS-(NAME|PATH)-WILDCARD,/.test(rule)).length,warnings};
+ }
  const store={
-  db,close:()=>db.close(),getUser,source,audit,getSettings,isActive,updateUser,pruneAudit,auditPage,
+  db,close:()=>db.close(),getUser,source,audit,getSettings,isActive,updateUser,pruneAudit,auditPage,rulesState,saveRules,previewRules,
   setSettings(patch){const settings=validateSettings(patch,getSettings());db.prepare("INSERT INTO settings(key,value) VALUES('admin_config',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(settings));return settings;},
   displayBytes:u=>Math.round((u?.display_gb??getSettings().defaultDisplayGB)*1024**3),
   publicPolicy:()=>{const s=getSettings();return {siteName:s.siteName,subscriptionMinutes:s.subscriptionMinutes,uiRefreshSeconds:s.uiRefreshSeconds,minPasswordLength:s.minPasswordLength};},
@@ -105,7 +153,7 @@ export function openStore(directory){
   logout:token=>{if(token)db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(token));},
   subscription,rotate,
   subscriptionUser(token){if(typeof token!=='string'||token.length>128)return null;const id=token.split('.')[0],u=getUser(id);return isActive(u)&&!u.must_change&&safeEqual(token,subscription(u))?u:null;},
-  config(u){const s=source();if(!s)throw Error('管理员尚未导入配置');return generateConfig(store.meter.overrideSource(s,u),JSON.parse(u.grants));},
+  config(u){const s=source();if(!s)throw Error('管理员尚未导入配置');s.rules=effectiveRules(s.rules||[],ruleProfile(u.id));return generateConfig(store.meter.overrideSource(s,u),JSON.parse(u.grants));},
  };
  store.meter=createMeter(store);
  store.health=createHealth(store);

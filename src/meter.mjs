@@ -41,8 +41,9 @@ export function createMeter(store){
   const grants=new Set(JSON.parse(user.grants));const ids=new Map(inventory(s).map(n=>[n.name,n.id]));
   s.proxies=s.proxies.flatMap(p=>{const n=nodes.find(n=>n.proxy_id===ids.get(p.name));if(!n)return [p];
    const enrolled=db.prepare('SELECT 1 FROM meter_allowlist WHERE user_id=? AND node_id=?').get(user.id,n.id);
-   // An unavailable managed gateway must not reveal its original upstream.
-   if(!n.enabled||n.client_template&&!enrolled)return [];
+   // Every managed route must have an individual enrollment. Never reveal
+   // shared source credentials while a new node/user awaits provisioning.
+   if(!n.enabled||!enrolled)return [];
    if(!grants.has(n.proxy_id)||!enrolled)return [p];
    return [n.client_template?{name:p.name,type:'vless',...JSON.parse(n.client_template),uuid:credential(user,n).uuid}:{...p,uuid:credential(user,n).uuid,...(n.outbound_tag==='uk-gusecure2'?{udp:false}:{})}];
   });

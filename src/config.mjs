@@ -1,6 +1,7 @@
 import YAML from 'yaml';
 import {createHash} from 'node:crypto';
-const builtin=new Set(['DIRECT','REJECT','REJECT-DROP','PASS','COMPATIBLE']);
+import {compatibleRule,ruleParts,BUILTIN_TARGETS,validateRules} from './rules.mjs';
+const builtin=new Set(BUILTIN_TARGETS);
 const idFor=name=>createHash('sha256').update(name).digest('hex').slice(0,24);
 export function parseSource(text){
   if(typeof text!=='string'||Buffer.byteLength(text)>524288)throw Error('配置不能超过 512 KiB');
@@ -30,13 +31,13 @@ export function parseSource(text){
   }
   for(const name of groups.keys())visit(name);
   if(source.rules&&!Array.isArray(source.rules))throw Error('rules 必须为列表');
+  validateRules(source.rules||[],source);
   return source;
 }
 export function inventory(source){return source.proxies.map(p=>({id:idFor(p.name),name:p.name,type:p.type}));}
-export function generateConfig(source,allowed){
+function selectSource(source,allowed){
   const selected=new Set(allowed);
   const proxies=source.proxies.filter(p=>selected.has(idFor(p.name)));
-  if(!proxies.length)throw Error('尚未分配可用节点');
   const proxyNames=new Set(proxies.map(p=>p.name));
   for(const p of proxies)if(p['dialer-proxy']&&!proxyNames.has(p['dialer-proxy'])&&!builtin.has(p['dialer-proxy']))throw Error('所选节点依赖尚未授权的前置节点');
   const inputGroups=source['proxy-groups']||[];
@@ -49,11 +50,17 @@ export function generateConfig(source,allowed){
     delete output['include-all'];delete output['include-all-proxies'];delete output['include-all-providers'];delete output.filter;delete output['exclude-filter'];
     return output;
   });
+  return {proxies,groups,reachable};
+}
+export function ruleTargets(source,allowed){return [...selectSource(source,allowed).reachable];}
+export function generateConfig(source,allowed){
+  const {proxies,groups,reachable}=selectSource(source,allowed);
+  if(!proxies.length)throw Error('尚未分配可用节点');
   const rules=(source.rules||[]).map(rule=>{
     if(typeof rule!=='string')throw Error('规则必须为字符串');
-    const parts=rule.split(',');const target=parts.at(-1)==='no-resolve'?parts.at(-2):parts.at(-1);
-    if(!reachable.has(target?.trim()))parts[parts.at(-1)==='no-resolve'?parts.length-2:parts.length-1]='REJECT';
-    return parts.join(',');
+    const {parts,target,targetIndex}=ruleParts(rule);
+    if(!reachable.has(target))parts[targetIndex]='REJECT';
+    return compatibleRule(parts.join(','));
   });
   const result={'mixed-port':7890,'allow-lan':false,mode:'rule','log-level':'warning',proxies:structuredClone(proxies)};
   // Do not publish controller secrets, local scripts or arbitrary top-level data.

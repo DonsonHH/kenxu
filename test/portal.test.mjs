@@ -52,7 +52,7 @@ test('account lifecycle, CSRF, role isolation, downloads and token revocation',a
   login=await request(pub,'/api/login',{method:'POST',body:{username:'alice',password:'alice-updated-password'},session:''});cookie=login.headers.get('set-cookie').split(';')[0];
   me=await (await request(pub,'/api/me')).json();csrf=me.csrf;assert.equal(me.nodes.length,1);assert.ok(!JSON.stringify(me).includes('fixture-secret'));assert.equal((await request(pub,'/api/admin/state')).status,403);
   let subPath=new URL(me.subscriptionUrl).pathname;
-  let sub=await request(pub,subPath,{session:''});assert.equal(sub.status,200);assert.match(sub.headers.get('cache-control'),/no-store/);assert.equal(sub.headers.get('referrer-policy'),'no-referrer');assert.ok(!(await sub.text()).includes('fixture-secret-B'));
+  let sub=await request(pub,subPath,{session:''});assert.equal(sub.status,200);assert.match(sub.headers.get('cache-control'),/no-store/);assert.equal(sub.headers.get('referrer-policy'),'no-referrer');assert.equal(sub.headers.get('content-disposition'),'attachment; filename=Kenxu.yaml');assert.ok(!(await sub.text()).includes('fixture-secret-B'));
   assert.equal((await request(pub,subPath.replace(/.$/,'x'),{session:''})).status,404);
   await request(pub,'/api/subscription/rotate',{method:'POST'});assert.equal((await request(pub,subPath,{session:''})).status,404);
   me=await (await request(pub,'/api/me')).json();subPath=new URL(me.subscriptionUrl).pathname;

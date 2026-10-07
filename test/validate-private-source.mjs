@@ -1,12 +1,12 @@
 // Reads private source without copying it into this repo or logging credentials.
-import {readFile,mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {readFile,mkdtemp,writeFile,copyFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import assert from 'node:assert/strict';
 import YAML from 'yaml';
 import {parseSource,inventory,generateConfig} from '../src/config.mjs';
-const [sourceFile,mihomo]=process.argv.slice(2);if(!sourceFile||!mihomo)throw Error('Provide source YAML and Mihomo executable paths');
+const [sourceFile,mihomo,resources]=process.argv.slice(2);if(!sourceFile||!mihomo)throw Error('Provide source YAML and Mihomo executable paths');
 const source=parseSource(await readFile(sourceFile,'utf8')),nodes=inventory(source);
 if(nodes.length>12)throw Error('Exhaustive subset test capped at 12 nodes');
 for(let mask=1;mask<(1<<nodes.length);mask++){
@@ -17,6 +17,7 @@ for(let mask=1;mask<(1<<nodes.length);mask++){
 }
 const dir=await mkdtemp(path.join(tmpdir(),'donson-yaml-validation-'));
 try{
+ if(resources)for(const name of ['Country.mmdb','ASN.mmdb','geoip.dat','geosite.dat'])await copyFile(path.join(resources,name),path.join(dir,name));
  for(let i=0;i<nodes.length;i++){
   const file=path.join(dir,`user-${i}.yaml`);await writeFile(file,generateConfig(source,[nodes[i].id]),{mode:0o600});
   const check=spawnSync(mihomo,['-t','-d',dir,'-f',file],{encoding:'utf8',timeout:20000,windowsHide:true});

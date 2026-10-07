@@ -3,6 +3,7 @@ import {createAdminUI} from '/admin.js';
 import {pointerMotion,revealPanel} from '/motion.js';
 import {CLIENTS,detectPlatform,clientImport} from '/client-imports.js';
 import {createGuideUI} from '/guide-ui.js';
+import {createRulesUI} from '/rules-ui.js';
 const $=selector=>document.querySelector(selector);
 let me=null,adminState=null,adminUsage=null,timer=null,currentPanel='dashboard',usageTask=null,lastUsageAt=0;
 let realm={adminInterface:false,policy:{uiRefreshSeconds:UI_REFRESH_SECONDS}};
@@ -11,10 +12,11 @@ const rendered=new Map();
 function changed(key,value){const next=JSON.stringify(value);if(rendered.get(key)===next)return false;rendered.set(key,next);return true;}
 const routes={
  user:[['工作台','dashboard','仪表盘','dashboard'],['工作台','subscription','我的订阅','subscription'],['工作台','connections','节点状态','nodes'],['工作台','usage','流量明细','traffic'],['使用与账户','knowledge','使用文档','knowledge'],['使用与账户','account','个人中心','account']],
- admin:[['概览','dashboard','仪表盘','dashboard'],['用户与流量','accounts','用户管理','users'],['用户与流量','traffic','流量统计','traffic'],['连接管理','nodes','节点管理','nodes'],['系统','settings','系统设置','settings'],['系统','audit','操作日志','audit']]
+ admin:[['概览','dashboard','仪表盘','dashboard'],['用户与流量','accounts','用户管理','users'],['用户与流量','traffic','流量统计','traffic'],['连接管理','nodes','节点管理','nodes'],['连接管理','rules','规则管理','subscription'],['系统','settings','系统设置','settings'],['系统','audit','操作日志','audit']]
 };
 const tell=(message,type='success')=>{if(window.portalToast){$('#status').textContent='';window.portalToast[type](message);}else $('#status').textContent=message;};
 const error=message=>tell(message,'error');
+const rulesUI=createRulesUI({api,node,tell,getUsers:()=>adminState?.users.filter(user=>user.role==='user')||[],getPanel:()=>currentPanel,onUnauthorized:()=>{dropSession();tell('登录已过期，请重新登录。','info');}});
 const kindName=kind=>({direct:'自建入口',forwarded:'SG2 → Glasgow · TCP',relay:'Jetson → 第三方',unmanaged:'未接入计量'}[kind]||'受管入口');
 const time=value=>value?new Date(value).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false}):'等待首次采样';
 const total=value=>bytes((value?.up||0)+(value?.down||0));
@@ -60,7 +62,7 @@ function selectPanel(id,{focus=false}={}){
  $('#page-heading').textContent=entry[2];document.title=entry[2]+' · '+realm.title+(realm.adminInterface?' · Admin':'');
  if(location.hash!=='#'+id)history.replaceState(null,'','#'+id);
  mobileMenu(false,false);if(focus)$('#page-heading').focus();
- if(me.role==='admin')adminUI.onPanel(id);
+ if(me.role==='admin'){adminUI.onPanel(id);rulesUI.onPanel(id);}
  window.portalCharts?.render();
  if(focus&&changed){if(me.role==='user')revealPanel($('#user-view [data-panel="'+id+'"]'));window.scrollTo({top:0,behavior:'instant'});}
 }
@@ -82,6 +84,7 @@ function resetUsage(){
  window.portalCharts?.clear();
  $('#import-clash').removeAttribute('href');$('#subscription').value='';
  adminUI.reset();
+ rulesUI.reset();
  for(const id of ['welcome-name','account-name','identity','node-count'])$('#'+id).textContent='';
 }
 function dropSession(){clearInterval(timer);me=null;adminState=null;resetUsage();$('#subscription').value='';$('#import-clash').removeAttribute('href');$('#identity').hidden=true;$('#logout').hidden=true;mobileMenu(false,false);show('login-view');}
@@ -172,7 +175,7 @@ async function load(){
 }
 async function loadAdmin(){
  $('#new-user').disabled=true;const identity=me,[state,settings]=await Promise.all([api('/api/admin/state'),api('/api/admin/settings')]);if(me!==identity)return;adminState=state;adminUI.setSettings(settings);$('#new-user').disabled=false;const users=adminState.users.filter(u=>u.role==='user');
- $('#users-stat').textContent=users.length;$('#active-users-stat').textContent=users.filter(u=>u.active).length+' 个可用';$('#nodes-stat').textContent=adminState.nodes.length;renderUsers();
+ $('#users-stat').textContent=users.length;$('#active-users-stat').textContent=users.filter(u=>u.active).length+' 个可用';$('#nodes-stat').textContent=adminState.nodes.length;renderUsers();rulesUI.syncUsers();
 }
 function renderUsers(){
  const term=$('#search-users').value.toLowerCase(),filter=$('#user-filter').value;
@@ -181,7 +184,7 @@ function renderUsers(){
   const row=node('div',undefined,'user-row'),info=node('div');info.append(node('strong',u.display_name?u.display_name+' · '+u.username:u.username),node('small',(!u.enabled?'已停用':u.active?'允许领取':'已到期')+' · '+u.grants.filter(id=>adminState.nodes.some(n=>n.id===id)).length+' 条线路'+(u.must_change?' · 待改初始密码':'')+(u.email?' · '+u.email:'')));
   const buttons=node('div',undefined,'actions'),edit=node('button','编辑权限','secondary'),reset=node('button','重置密码','quiet');
   edit.onclick=()=>editUser(u);reset.onclick=()=>{const f=$('#reset-form');f.reset();f.elements.id.value=u.id;$('#reset-status').textContent='';$('#reset-dialog').showModal();};
-  buttons.append(edit,reset);row.append(info,buttons);return row;
+  const rules=node('button','配置规则','secondary');rules.onclick=()=>{selectPanel('rules',{focus:true});rulesUI.openUser(u.id);};buttons.append(edit,rules,reset);row.append(info,buttons);return row;
  }));
  if(!users.length)$('#users-list').append(node('p','没有匹配的账号。','muted'));
 }
