@@ -119,8 +119,9 @@ function renderUsage(data){
   adminUsage=data;renderTraffic();$('#admin-usage-sync').textContent='每 '+realm.policy.uiRefreshSeconds+' 秒刷新';$('#admin-sync').textContent='每 '+realm.policy.uiRefreshSeconds+' 秒刷新';
   const sum=field=>data.users.reduce((r,u)=>({up:r.up+u[field].up,down:r.down+u[field].down}),{up:0,down:0});
   const month=sum('month');$('#admin-month-up').textContent=bytes(month.up);$('#admin-month-down').textContent=bytes(month.down);$('#admin-today').textContent=total(sum('today'));$('#admin-total').textContent=total(sum('total'));
-  $('#fresh-routes').textContent=data.nodes.filter(n=>n.enabled&&n.last_seen>Date.now()-90000).length+' / '+data.nodes.length;
-  $('#collectors-stat').textContent=new Set(data.nodes.map(n=>n.agent_id)).size+' 个采集器';
+  const activeNodes=data.nodes.filter(n=>n.enabled);
+  $('#fresh-routes').textContent=activeNodes.filter(n=>n.last_seen>Date.now()-90000).length+' / '+activeNodes.length;
+  $('#collectors-stat').textContent=new Set(activeNodes.map(n=>n.agent_id)).size+' 个采集器';
   $('#admin-nodes').replaceChildren(...adminState.nodes.map(n=>{const m=data.nodes.find(m=>m.proxy_id===n.id),card=routeCard({...n,kind:m?.kind},m,{admin:true});if(m)adminUI.addNodeAmounts(card,m,data);return card;}));adminUI.onUsage();
  }else{
   const normal=lastHealth?.nodes.filter(n=>n.status==='normal').length;$('#nodes-normal').textContent=normal??'—';$('#nodes-failed').textContent=lastHealth?.nodes.filter(n=>n.status==='failed').length??'—';$('#nodes-check-description').textContent='由 Jetson 验证连接，每 '+(lastHealth?.checkIntervalMinutes||15)+' 分钟检测一次';$('#dashboard-nodes').textContent=normal===undefined?'—':normal+' / '+me.nodes.length;$('#dashboard-nodes-note').textContent=normal===undefined?'等待检测结果':'正常 / 已分配';

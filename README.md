@@ -6,7 +6,7 @@
 
 管理员集中维护线路、分配账号与权限；用户登录后领取自己的配置，查看用量和连接状态。Kenxu 使用 Node.js 与 SQLite，当前部署运行在 Jetson 上，通过 Cloudflare Tunnel 提供 HTTPS 访问，管理后台经私有 SSH 转发访问。
 
-当前代码版本 **1.4.2** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
+当前代码版本 **1.4.3** · [版本发布](https://github.com/DonsonHH/kenxu/releases) · [使用指南](docs/user-guide.md) · [部署与维护](docs/operations.md) · [问题反馈](https://github.com/DonsonHH/kenxu/issues)
 
 ## 界面预览
 
@@ -153,6 +153,8 @@ pnpm test:browser
 
 规则编辑流程由 `test/browser-rules.mjs` 验证，包含用户切换、失败恢复与迟到响应隔离。可用 `node test/rules-core.mjs /absolute/path/to/mihomo` 额外运行真实内核检查；该检查仅使用虚构配置。私有源的子集检查脚本接受第三个地理数据资源目录参数，避免把缺少 GeoIP 数据的环境故障误判为规则失败；不要将真实配置或诊断原文提交到仓库。
 
+线路退役的页面统计由 `test/browser-retirement.mjs` 验证，覆盖共享采集器登记入口退役、最后一条共享线路退役、当前线路／采集器数量与历史用量保留。运行概况只统计启用线路；历史用量和排行保留退役线路产生的实际记录。
+
 ```text
 src/          服务端、数据存储、计量、连接检测与前端构建入口
 public/       页面、可编辑样式、浏览器模块与构建产物
@@ -174,7 +176,7 @@ docs/         用户指南、部署维护、版本 review 与界面截图
 
 欢迎通过 [Issues](https://github.com/DonsonHH/kenxu/issues) 提交问题和改进建议。描述版本、复现步骤、预期与实际结果，截图及日志请先移除账号凭据。涉及安全问题时，请先联系维护者确认私下报告方式。
 
-提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md)、[移动端适配](docs/review-mobile-v1.2.0.md)、[教程交互优化](docs/review-guide-v1.2.1.md)、[登录入口安全](docs/review-login-v1.2.2.md)、[规则兼容／个人分配](docs/review-rules-v1.3.0.md)、[大屏／检测口径／体验](docs/review-experience-v1.4.0.md)、[节点状态范围复核](docs/review-scope-v1.4.1.md) 和[线路退役](docs/review-retirement-v1.4.2.md)。
+提交代码前运行相关检查；界面修改请附桌面和手机效果，协议或计量修改请说明数据兼容性。项目 review 记录见 [1.0.0](docs/release-v1.0.0.md)、[1.1.0](docs/review-v1.1.0.md)、[文档校对](docs/review-docs-20261002.md)、[移动端适配](docs/review-mobile-v1.2.0.md)、[教程交互优化](docs/review-guide-v1.2.1.md)、[登录入口安全](docs/review-login-v1.2.2.md)、[规则兼容／个人分配](docs/review-rules-v1.3.0.md)、[大屏／检测口径／体验](docs/review-experience-v1.4.0.md)、[节点状态范围复核](docs/review-scope-v1.4.1.md)、[线路退役](docs/review-retirement-v1.4.2.md) 和[退役后运行统计复核](docs/review-active-counts-v1.4.3.md)。
 
 ## 致谢与许可
 
