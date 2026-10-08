@@ -105,7 +105,9 @@ export function createMeter(store){
  return {
   desired,overrideSource,report,usage,totals,
   retireUserCredentials(userId){const user=store.getUser(userId);if(!user||user.role!=='user'||user.enabled)throw Error('Only disabled ordinary-user credentials may be retired');return db.prepare('INSERT OR IGNORE INTO meter_retired_identities(agent_id,email,retired_at) SELECT n.agent_id,c.email,? FROM meter_credentials c JOIN meter_nodes n ON n.id=c.node_id WHERE c.user_id=?').run(Date.now(),userId).changes;},
-  authenticate(token){if(typeof token!=='string'||token.length<30||token.length>128)return null;return db.prepare('SELECT * FROM meter_nodes WHERE token_hash=? AND enabled=1 AND agent_id=id').get(digest(token))||null;},
+  // A retired logical route can be the original physical-agent registration.
+  // Its token may serve surviving enabled siblings, never the retired route.
+  authenticate(token){if(typeof token!=='string'||token.length<30||token.length>128)return null;return db.prepare('SELECT n.* FROM meter_nodes n WHERE n.token_hash=? AND n.agent_id=n.id AND (n.enabled=1 OR EXISTS(SELECT 1 FROM meter_nodes sibling WHERE sibling.agent_id=n.id AND sibling.enabled=1))').get(digest(token))||null;},
   register(proxyId,name,{agentId,outboundTag,clientTemplate}={}){if(!store.inventory().some(n=>n.id===proxyId&&n.type==='vless'))throw Error('节点不存在或不是 VLESS');if(agentId&&nodeById(agentId)?.agent_id!==agentId)throw Error('Invalid physical agent');if(outboundTag&&!/^[a-zA-Z0-9_-]{1,64}$/.test(outboundTag))throw Error('Invalid outbound');const id=randomUUID(),token=randomBytes(32).toString('base64url');db.prepare('INSERT INTO meter_nodes(id,proxy_id,name,token_hash,created,agent_id,outbound_tag,client_template) VALUES(?,?,?,?,?,?,?,?)').run(id,proxyId,name,digest(token),Date.now(),agentId||id,outboundTag||null,clientTemplate?JSON.stringify(clientTemplate):null);return {id,token};},
   nodes:()=>db.prepare('SELECT id,proxy_id,name,enabled,last_seen,created,agent_id,outbound_tag,client_template FROM meter_nodes').all().map(n=>({...n,client_template:undefined,kind:n.client_template?'relay':n.outbound_tag?'forwarded':'direct'})),
   nodeById,

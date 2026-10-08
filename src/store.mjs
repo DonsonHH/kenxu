@@ -9,6 +9,7 @@ import {createMeter} from './meter.mjs';
 import {createHealth} from './health.mjs';
 import {DEFAULT_SETTINGS,validateSettings,invalid} from './settings.mjs';
 import {validateRules,BUILTIN_TARGETS,effectiveRules,ruleParts} from './rules.mjs';
+import {retireSourceNode} from './retirement.mjs';
 const scrypt=promisify(rawScrypt);
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const safeEqual=(a,b)=>Buffer.byteLength(a)===Buffer.byteLength(b)&&timingSafeEqual(Buffer.from(a),Buffer.from(b));
@@ -127,8 +128,25 @@ export function openStore(directory){
   let output=[];try{if(available.proxies.length)output=YAML.parse(generateConfig({...available,rules:raw},grants)).rules;}catch(error){throw invalid(error.message);}
   return {scope:current.scope,mode:profile.mode,effectiveRules:output,count:output.length,convertedCount:raw.filter(rule=>/^PROCESS-(NAME|PATH)-WILDCARD,/.test(rule)).length,warnings};
  }
+ function retireNode(name){
+  db.exec('BEGIN IMMEDIATE');try{
+   const current=db.prepare("SELECT value FROM settings WHERE key='source'").get();if(!current)throw invalid('请先导入私有配置源');
+   const prepared=retireSourceNode(current.value,name);
+   if(db.prepare('SELECT rules FROM user_rule_profiles').all().some(profile=>JSON.parse(profile.rules).some(rule=>ruleParts(rule).target===name)))throw invalid('个人规则直接引用此节点，请先选择替代策略');
+   db.prepare("UPDATE settings SET value=? WHERE key='source'").run(prepared.text);
+   const meter=db.prepare('SELECT id FROM meter_nodes WHERE proxy_id=?').get(prepared.id);
+   if(meter){db.prepare('UPDATE meter_nodes SET enabled=0 WHERE id=?').run(meter.id);db.prepare('DELETE FROM meter_allowlist WHERE node_id=?').run(meter.id);}
+   let updatedUsers=0;for(const user of db.prepare('SELECT id,grants FROM users').all()){
+    const grants=JSON.parse(user.grants);if(grants.includes(prepared.id)){db.prepare('UPDATE users SET grants=? WHERE id=?').run(JSON.stringify(grants.filter(id=>id!==prepared.id)),user.id);updatedUsers++;}
+   }
+   // Credentials and usage remain available for historical/queued counters.
+   // Account versions, passwords and sessions are not rotated by retirement.
+   const result={name,remainingNodes:prepared.remainingNodes,updatedUsers,historicalUsageRetained:true};
+   audit('operator','node-retire',prepared.id,{name,updatedUsers});db.exec('COMMIT');return result;
+  }catch(error){db.exec('ROLLBACK');throw error;}
+ }
  const store={
-  db,close:()=>db.close(),getUser,source,audit,getSettings,isActive,updateUser,pruneAudit,auditPage,rulesState,saveRules,previewRules,
+  db,close:()=>db.close(),getUser,source,audit,getSettings,isActive,updateUser,pruneAudit,auditPage,rulesState,saveRules,previewRules,retireNode,
   setSettings(patch){const settings=validateSettings(patch,getSettings());db.prepare("INSERT INTO settings(key,value) VALUES('admin_config',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(JSON.stringify(settings));return settings;},
   displayBytes:u=>Math.round((u?.display_gb??getSettings().defaultDisplayGB)*1024**3),
   publicPolicy:()=>{const s=getSettings();return {siteName:s.siteName,subscriptionMinutes:s.subscriptionMinutes,uiRefreshSeconds:s.uiRefreshSeconds,minPasswordLength:s.minPasswordLength};},

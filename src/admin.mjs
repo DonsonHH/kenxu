@@ -21,5 +21,7 @@ try{
   await store.createUser(value||'donson',password,[],'admin');console.log('管理员已创建');
  }else if(command==='import'){
   if(!value)throw Error('请指定配置文件路径');store.importSource(await readFile(value,'utf8'));console.log(`已导入 ${store.inventory().length} 个节点，未输出凭据`);
- }else throw Error('用法：node src/admin.mjs create-admin <用户名> 或 import <私有 YAML 路径>');
+ }else if(command==='retire-node'){
+  if(!value)throw Error('请指定完整节点名称');console.log(JSON.stringify(store.retireNode(value)));
+ }else throw Error('用法：node src/admin.mjs create-admin <用户名>、import <私有 YAML 路径> 或 retire-node <完整节点名称>');
 }catch(e){console.error(e.message);process.exitCode=1;}finally{store.close();}
