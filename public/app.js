@@ -145,8 +145,15 @@ async function refreshUsage({force=false,propagate=false}={}){
  if(!force&&Date.now()-lastUsageAt<(realm.policy.uiRefreshSeconds||UI_REFRESH_SECONDS)*1000)return;
  const task={identity};
  task.promise=(async()=>{try{
-  const [data,health]=await Promise.all([api(identity.role==='admin'?'/api/admin/usage':'/api/usage'),api(identity.role==='admin'?'/api/admin/nodes/status':'/api/nodes/status').catch(()=>null)]);
-  if(me!==identity)return;lastHealth=health;renderUsage(data);lastUsageAt=Date.now();
+  const [data,health,profile]=await Promise.all([api(identity.role==='admin'?'/api/admin/usage':'/api/usage'),api(identity.role==='admin'?'/api/admin/nodes/status':'/api/nodes/status').catch(()=>null),identity.role==='user'?api('/api/me'):null]);
+  if(me!==identity)return;
+  if(profile){
+   const deliveryChanged=identity.subscriptionUrl!==profile.subscriptionUrl;
+   Object.assign(identity,profile);const ids=new Set(profile.nodes.map(n=>n.id));if(health)health.nodes=health.nodes.filter(n=>ids.has(n.id));
+   $('#welcome-name').textContent=me.displayName||me.username;$('#account-name').textContent=me.username;$('#identity').textContent=me.username;$('#plan-name').textContent=me.planName||'好友共享';$('#node-count').textContent=me.nodes.length+' 条线路';
+   $('#empty-grants').hidden=!!me.nodes.length;$('#delivery').hidden=!me.nodes.length;if(deliveryChanged)updateDelivery();
+  }
+  lastHealth=health;renderUsage(data);lastUsageAt=Date.now();
  }catch(err){if(me===identity){if(err.status===401){dropSession();tell('登录已过期，请重新登录。','info');}else{$(identity.role==='admin'?'#admin-usage-sync':'#usage-sync').textContent='更新失败 · 数据可能过期';$('#page-sync').textContent='等待重新连接';}}throw err;}
  finally{if(usageTask===task)usageTask=null;}})();usageTask=task;try{return await task.promise;}catch(err){if(propagate)throw err;}
 }

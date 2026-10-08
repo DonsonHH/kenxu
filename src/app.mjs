@@ -17,6 +17,13 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
  const guard=createAuthGuard(store,admin?'admin':'user');
  const throttle=(req,res,action,account)=>{const result=guard.consume(action,account,clientAddress(req,trustCloudflare&&!admin));if(!result.allowed){res.set('Retry-After',String(result.retryAfter)).status(429).json({error:'尝试过多，请稍后重试。',retryAfter:result.retryAfter});return false;}if(!guard.acquire()){res.set('Retry-After','3').status(429).json({error:'登录服务繁忙，请稍后重试。',retryAfter:3});return false;}return result;};
  const tokens=req=>{const parts=(req.headers.cookie||'').split(';').map(s=>s.trim());return parts.find(s=>s.startsWith(cookieName+'='))?.slice(cookieName.length+1)||'';};
+ // Status and delivery must share the same scope: a grant alone does not
+ // activate a managed gateway or create the user's individual credentials.
+ const userNodes=u=>{
+  const allowed=new Set(JSON.parse(u.grants)),meters=store.meter.nodes();
+  const enrollments=new Set(store.db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(u.id).map(n=>n.node_id));
+  return store.inventory().flatMap(n=>{const meter=meters.find(m=>m.proxy_id===n.id);return allowed.has(n.id)&&(!meter||meter.enabled&&enrollments.has(meter.id))?[{...n,metered:!!meter?.enabled,kind:meter?.kind||'unmanaged'}]:[];});
+ };
  app.use((req,res,next)=>{
   const sensitiveDownload=/^\/s\//i.test(req.path)||/^\/api\/config\/?$/i.test(req.path);
   res.set({'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':sensitiveDownload?'no-referrer':'same-origin','X-Robots-Tag':'noindex, nofollow','Content-Security-Policy':"default-src 'self'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",'Cross-Origin-Resource-Policy':'same-origin'});
@@ -79,13 +86,11 @@ export function createApp({store,origin,subscriptionOrigin=origin,admin=false,mo
   next();
  });
  app.get('/api/me',(req,res)=>{
-  const u=req.user,allowed=new Set(JSON.parse(u.grants));
-  const meters=store.meter.nodes();
-  const enrollments=new Set(store.db.prepare('SELECT node_id FROM meter_allowlist WHERE user_id=?').all(u.id).map(n=>n.node_id));
-  res.json({username:u.username,displayName:u.display_name||u.username,planName:u.plan_name||'好友共享',role:u.role,mustChange:!!u.must_change,csrf:u.csrf,nodes:store.inventory().filter(n=>{const m=meters.find(m=>m.proxy_id===n.id);return allowed.has(n.id)&&(!m||m.enabled&&enrollments.has(m.id));}).map(n=>({...n,metered:meters.some(m=>m.enabled&&m.proxy_id===n.id),kind:meters.find(m=>m.proxy_id===n.id)?.kind||'unmanaged'})),subscriptionUrl:!u.must_change&&u.role==='user'?`${subscriptionOrigin}/s/${store.subscription(u)}.yaml`:null,adminInterface:admin});
+  const u=req.user;
+  res.json({username:u.username,displayName:u.display_name||u.username,planName:u.plan_name||'好友共享',role:u.role,mustChange:!!u.must_change,csrf:u.csrf,nodes:userNodes(u),subscriptionUrl:!u.must_change&&u.role==='user'?`${subscriptionOrigin}/s/${store.subscription(u)}.yaml`:null,adminInterface:admin});
  });
  app.get('/api/usage',(req,res)=>res.json(store.meter.usage(req.user.id)));
- app.get('/api/nodes/status',(req,res)=>res.json({nodes:store.health.nodes(JSON.parse(req.user.grants)),checkIntervalMinutes:store.getSettings().healthCheckMinutes}));
+ app.get('/api/nodes/status',(req,res)=>res.json({nodes:store.health.nodes(userNodes(req.user).map(n=>n.id)),checkIntervalMinutes:store.getSettings().healthCheckMinutes}));
  app.post('/api/logout',(req,res)=>{store.logout(tokens(req));res.set('Set-Cookie',cookie('',0));res.json({ok:true});});
  app.post('/api/password',async(req,res)=>{
   if(!throttle(req,res,'password',req.user.id))return;
